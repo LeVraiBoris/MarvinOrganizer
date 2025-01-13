@@ -1,4 +1,5 @@
 import os
+import json
 import pandas as pd
 import numpy as np
 # Paralellize some jobs where possible... after all I got 32 CPUs I should use them...
@@ -75,14 +76,33 @@ class MarvinOrganizerData(Dataset):
 		# self.fileData = {f:None for f in self.fileList}
         self.utils = MarvinOrganizerUtils()
         self.data = []
+        self.label2id = {}
+        self.id2label = {}
 
-    def preloadFolder(self, path, label):
-        fileList = os.listdir(path)
+    def preloadFolder(self, path, classNum, label):
+        """Load the data for one class from a given folder
 
-        for f in tqdm(fileList, total=len(fileList)):
-            emb = utils.buildFileEmbedding(path+f)
-            self.data.append({"vct": emb, "lbl": label})
-
+        Args:
+            path (str): path to the folder to load
+            classNum (int): id of the class the data belongs to 
+            label (str): the name of the class in plain text
+        """
+        jsonFile = path[:-1]+".json"
+        folderData = []
+        if os.path.exists(jsonFile):
+            with open(jsonFile, "r") as f:
+                folderData = json.load(f)
+        else:
+            fileList = os.listdir(path)
+            for f in tqdm(fileList, total=len(fileList)):
+                emb = utils.buildFileEmbedding(path+f)
+                folderData.append({"vct": list(emb), "classNum": classNum, "lbl": label})
+            with open(jsonFile,"w") as f:
+                json.dump(folderData, f)
+        self.data = self.data + folderData
+        self.label2id[label] = classNum
+        self.id2label[classNum] = label
+  
     def __len__(self):
         return len(self.data)
 
@@ -90,12 +110,12 @@ class MarvinOrganizerData(Dataset):
         idx = idx % self.__len__()
         vct = torch.tensor(self.data[idx]["vct"])
 
-        lbl = self.data[idx]["lbl"]
-        return vct, lbl
+        cls = self.data[idx]["classNum"] # Class Index
+        return vct, cls
 
 class MarvinOrganizer(nn.Module):
     # Batch size when learning
-    batchSize = 1
+    batchSize = 5
     learningRate = 1e-3
     # Loss regularization
     regParam = 1e-3
@@ -136,6 +156,17 @@ class MarvinOrganizer(nn.Module):
         # Initialize the loss function and optimizer 
         self.lossFct = nn.CrossEntropyLoss()
         self.optimizer = torch.optim.SGD(self.parameters(), lr=self.learningRate)
+        self.label2id = {}
+        self.id2label = {}
+
+    def addLabelDescription(self, dataset:MarvinOrganizerData):
+        """Add label/id information to the model from the training dataset
+
+        Args:
+            dataset (MarvinOrganizerData): dataset that will be used for training
+        """
+        self.label2id = dataset.label2id
+        self.id2label = dataset.id2label
 
     def toDevice(self):
         """Send the model to GPU if available"""
@@ -221,10 +252,10 @@ class MarvinOrganizer(nn.Module):
 
         Args:
             dataset (MarvinOrganizerData): train/test data
-            epoch (int): number of epoch to run the training. defualts to 10
+            epoch (int): number of epoch to run the training. Defaults to 10
         """
-        generator = torch.Generator().manual_seed(42)
-        trainData, testData = torch.utils.data.random_split(dataset, [0.8, 0.2])
+        self.addLabelDescription(dataset)
+        trainData, testData = torch.utils.data.random_split(dataset, [0.9, 0.1])
         trainDataLoader = DataLoader(trainData, batch_size=self.batchSize, shuffle=True)
         testDataLoader = DataLoader(testData, batch_size=self.batchSize, shuffle=True)
         for e in range(epoch):
@@ -232,65 +263,56 @@ class MarvinOrganizer(nn.Module):
             self.fit(trainDataLoader)
             self.test(testDataLoader)
         print("Done !")
-# class ryltyEncoderSorter(ryltySongSorter):
-#     """Perform song/alternate income source sorting using a sparse autoencoder model"""
 
-#     def __init__(self, modelFile=None):
-#         super(ryltyEncoderSorter).__init__()
-#         print('Loading model ....', end=' ')
-#         self.model = ryltySparseAutoEncoder()
-#         self.model.load_state_dict(torch.load(modelFile))
-#         # setting device on GPU if available, else CPU
-#         self.torchDevice = 'cuda' if torch.cuda.is_available() else 'cpu'
-#         # Send the network to GPU/CPUself.encode(x)
-#         self.model.to(self.torchDevice)
-#         # Set the model in evaluation mode and disable autograd36*36
-#         self.model.eval()
-#         torch.no_grad()
-#         print('Done.')
+    def save(self, path, modelName):
+        """Save the model and the label to id information in a common place
 
-#     def sortSongs(self, songList):
-#         self.rawSongList = songList
-#         # Encode items in the song list
-#         self.uniqueSongNames, self.uniqueSongIndexes = self.utils.getUniqueSongNames(self.rawSongList)
-#         embeddings = self.LLM.encode(self.uniqueSongNames)
-#         encodings = [self.model.encode(emb) for emb in embeddings]
-#         output = [self.model.decode(c) for c in encodings]
+        Args:
+            path (str): path to the folder to save the model
+            modelName (str): name of the model (basename -without extension- for the different files that will be created)
+            
+        """
+        torch.save(self.state_dict(), modelPath+modelName+'.pth')
+        with open(modelPath+modelName+'.json','w') as f:
+            json.dump([self.label2id, self.id2label], f)
 
-#         # See what is going on
-#         for song, encoding in zip(self.uniqueSongNames, encodings):
-#             print(song, ": ", encoding)
+    def load(self, path, modelName):
+        """load the model and the label to id information in a common place
+
+        Args:
+            path (str): path to the folder to save the model
+            modelName (str): name of the model (basename -without extension- for the different files to load)
+            
+        """
+        self.load_state_dict(torch.load(modelPath+modelName+'.pth', weights_only=True))
+        # Note: we do not do any data type conversion since any error there means we do not load the correct model (see constructor)
+        self.toDevice()
+
+        with open(modelPath+modelName+'.json','r') as f:
+            lblid  = json.load([self.label2id, self.id2label], f)
+            self.label2id = lblid['label2id']
+            self.id2label = lblid['id2label']
 
 if __name__ == "__main__":
     version = '1.0'
     modelPath = "./Model/"
-    saveModelName = 'marvinOrganizer_'+version+".pth"
-    loadModelName = 'marvinOrganizer_'+version+".pth"
+    saveModelName = 'marvinOrganizer_'+version
+    loadModelName = 'marvinOrganizer_'+version
     rootPath = "./Data/Christopher Liggio/"
     utils = MarvinOrganizerUtils()
+    
+    data = MarvinOrganizerData()
+    data.preloadFolder(rootPath+"BMI Publisher/", classNum=0, label="BMI_Publisher")
+    data.preloadFolder(rootPath+"BMI Writer/", classNum=1, label="BMI_Writer")
+    # Laod the  model if it existst
     marvin = MarvinOrganizer()
     if os.path.exists(modelPath+loadModelName):
-        marvin.load_state_dict(torch.load(modelPath+loadModelName, weights_only=True))
-        marvin.toDevice()
-
-    data = MarvinOrganizerData()
-    data.preloadFolder(rootPath+"BMI Publisher/", label=0)
-    data.preloadFolder(rootPath+"BMI Writer/", label=1)
-    marvin.trainLoop(data,epoch=10)
-    torch.save(marvin.state_dict(), modelPath+saveModelName)
+        marvin.load(modelPath, loadModelName)
+    else:
+        marvin.addLabelDescription(data)
+    
+    marvin.trainLoop(data,epoch=10000)
+    marvin.save(modelPath, saveModelName)
     x = torch.rand(1,1260).to()
     pred = marvin.predict(x)
     print(pred)
-    # emb = utils.buildFileEmbedding('./test.pdf')
-    # print('Pdf: ')
-    # for i in emb:
-    #      print(i, end=", ")
-    
-    # emb = utils.buildFileEmbedding('./test.xlsx')
-    # print('\n Xls: ')
-    # for i in emb:
-    #      print(i, end=", ")
-    # emb = utils.buildFileEmbedding('./test.csv')
-    # print('\n Csv: ')
-    # for i in emb:
-    #      print(i, end=", ")
