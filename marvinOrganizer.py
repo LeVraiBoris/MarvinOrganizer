@@ -39,19 +39,29 @@ class MarvinOrganizerUtils:
         # Remove special characters from text 
         txt = txt.replace('\n', ' ').lower()
         txt = unidecode(txt) # remove accents and special characters
-        digrammCounts = list(Parallel(n_jobs=-1)(delayed(countDigramms)(txt, k) for k in digrammList))
+        digrammCounts = [countDigramms(txt, k) for k in digrammList]
+        #  digrammCounts = list(Parallel(n_jobs=-1)(delayed(countDigramms)(txt, k) for k in digrammList))
         digrammCountsArr = np.array(digrammCounts)
         embeddings = digrammCountsArr/np.sum(digrammCountsArr)
         return embeddings
     
     def buildFileEmbedding(self, filename):
         txt = ""
-        if filename[-4:] == '.pdf':
-            txt = self.readPdf(filename)
-        elif filename[-4:] == '.csv':
-            txt = self.readCSV(filename)
-        elif filename[-4:] == '.xls' or filename[-5:] == '.xlsx':
-            txt = self.readXLS(filename)
+        emb = []
+        try:
+            if filename[-4:] == '.pdf':
+                txt = self.readPdf(filename)
+            elif filename[-4:] == '.csv':
+                txt = self.readCSV(filename)
+            elif filename[-4:] == '.xls' or filename[-5:] == '.xlsx':
+                txt = self.readXLS(filename)
+        except Exception as inst:
+            emb = []
+            print("Could not read : ", filename)
+            print(type(inst))
+            print(inst.args)
+            print(inst)
+            return emb
         emb = self.buildTextEmbedding(txt)
         return emb
     
@@ -61,10 +71,11 @@ class MarvinOrganizerUtils:
         return txt
     
     def readCSV(self, filename):
-        df = pd.read_csv(filename)
-        txt = df.to_string(index=False)
+        txt = ''
+        with open(filename, "r", encoding="utf8", errors='ignore') as f:
+            txt = f.read()
         return txt
-    
+
     def readXLS (self, filename):
         df = pd.read_excel(filename)
         txt = df.to_string(index=False)
@@ -92,17 +103,74 @@ class MarvinOrganizerData(Dataset):
         if os.path.exists(jsonFile):
             with open(jsonFile, "r") as f:
                 folderData = json.load(f)
+                # Force the class number and label in accordance to what is given in the function call
+                for d in folderData:
+                    d["classNum"] = classNum
+                    d["lbl"] = label
         else:
             fileList = os.listdir(path)
-            for f in tqdm(fileList, total=len(fileList)):
-                emb = utils.buildFileEmbedding(path+f)
-                folderData.append({"vct": list(emb), "classNum": classNum, "lbl": label})
+            # for f in tqdm(fileList, total=len(fileList)):
+            #     emb = utils.buildFileEmbedding(path+f)
+            #     folderData.append({"vct": list(emb), "classNum": classNum, "lbl": label})
+            embList = list((Parallel(n_jobs=-1)(delayed(utils.buildFileEmbedding)(path + f) for f in fileList)))
+            folderData = [{"vct": list(v), "classNum": classNum, "lbl": label} for v in embList if (len(v) > 0) and (not np.isnan(v).any())]
             with open(jsonFile,"w") as f:
                 json.dump(folderData, f)
+        
         self.data = self.data + folderData
         self.label2id[label] = classNum
         self.id2label[classNum] = label
-  
+
+    def loadAll(self, root):
+        """Load an entire directory tree at ones and infers the class name from the directory names.
+
+            This assumes a fixed directory tree: type/Source
+            In this one the class is a composite of the file type and source: 
+
+        Args:
+            root (str): root directory to start exploring from (must end with "/").
+        """
+        classIdx = 0
+        for d1 in os.listdir(root):
+            for d2 in os.listdir(root+d1):
+                self.preloadFolder(root+d1+"/"+d2, classNum=classIdx, label=d1+"-"+d2)
+                classIdx += 1
+    def loadByType(self, root):
+        """Load an entire directory tree at ones and sort the data by type.
+
+            This assumes a fixed directory tree: type/Source
+
+        Args:
+            root (str): root directory to start exploring from (must end with "/").
+        """
+        classIdx = 0
+        for d1 in os.listdir(root):
+            for d2 in os.listdir(root+d1):
+                self.preloadFolder(root+d1+"/"+d2, classNum=classIdx, label=d1)
+            classIdx+=1
+        self.numClasses = classIdx
+
+    def loadBySource(self, root):
+        """Load an entire directory tree at ones and sort the data by source.
+
+            This assumes a fixed directory tree: type/Source
+
+        Args:
+            root (str): root directory to start exploring from (must end with "/").
+        """
+        classIdx = 0
+        sourceIdx = {}
+        for d1 in os.listdir(root):
+            for d2 in os.listdir(root+d1):
+                if os.path.isdir(root+d1+"/"+d2):
+                    if d2 in list(sourceIdx.keys()):
+                        self.preloadFolder(root+d1+"/"+d2+"/", classNum=sourceIdx[d2], label=d2)
+                    else:
+                        self.preloadFolder(root+d1+"/"+d2+"/", classNum=classIdx, label=d2)
+                        sourceIdx[d2] = classIdx
+                        classIdx += 1
+        self.numClasses = classIdx
+
     def __len__(self):
         return len(self.data)
 
@@ -115,7 +183,7 @@ class MarvinOrganizerData(Dataset):
 
 class MarvinOrganizer(nn.Module):
     # Batch size when learning
-    batchSize = 5
+    batchSize = 16
     learningRate = 1e-3
     # Loss regularization
     regParam = 1e-3
@@ -185,7 +253,9 @@ class MarvinOrganizer(nn.Module):
         logits = self.network(x)
         predProbab = self.softMax(logits)
         classNumber = predProbab.argmax(1)
-        return classNumber
+        score = predProbab[classNumber]
+        classLabel = self.id2label[str(classNumber)]
+        return classNumber, classLabel, score
 
 
     def fit(self, dataloader):
@@ -215,9 +285,9 @@ class MarvinOrganizer(nn.Module):
             loss.backward()
             self.optimizer.step()
             self.optimizer.zero_grad()
-            if i % 100 == 0:
-                loss, current = loss.item(), i * self.batchSize + len(embedding)
-                print(f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
+            # if i % 100 == 0:
+            #     loss, current = loss.item(), i * self.batchSize + len(embedding)
+            #     print(f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
         epoch_loss = running_loss / counter
         print(f"Train Loss: {loss:.3f}")
         return epoch_loss
@@ -246,22 +316,29 @@ class MarvinOrganizer(nn.Module):
         epochLoss = runningLoss / len(dataloader)
         epochCorrect = correct / size
         print(f"Test Error: \n Accuracy: {(100*epochCorrect):>0.1f}%, Avg loss: {epochLoss:>8f} \n")
-
-    def trainLoop(self, dataset, epoch=10):
+        return epochLoss
+    
+    def trainLoop(self, dataset, modelPath, modelName, epoch=10):
         """Train the model using the provided dataset 
 
         Args:
             dataset (MarvinOrganizerData): train/test data
+            modelPath (str): path to the folder where to autosave the model
+            modelName (str): base name for the model
             epoch (int): number of epoch to run the training. Defaults to 10
         """
-        self.addLabelDescription(dataset)
-        trainData, testData = torch.utils.data.random_split(dataset, [0.9, 0.1])
+        # self.addLabelDescription(dataset)
+        trainData, testData = torch.utils.data.random_split(dataset, [0.8, 0.2])
         trainDataLoader = DataLoader(trainData, batch_size=self.batchSize, shuffle=True)
         testDataLoader = DataLoader(testData, batch_size=self.batchSize, shuffle=True)
+        bestLoss = 10000
         for e in range(epoch):
             print(f"Epoch {e+1}\n-------------------------------")
             self.fit(trainDataLoader)
-            self.test(testDataLoader)
+            epochLoss = self.test(testDataLoader)
+            if epochLoss < bestLoss:
+                self.save(modelPath, modelName)
+                bestLoss = epochLoss
         print("Done !")
 
     def save(self, path, modelName):
@@ -289,30 +366,35 @@ class MarvinOrganizer(nn.Module):
         self.toDevice()
 
         with open(modelPath+modelName+'.json','r') as f:
-            lblid  = json.load([self.label2id, self.id2label], f)
-            self.label2id = lblid['label2id']
-            self.id2label = lblid['id2label']
+            lblid  = json.load(f)
+            self.label2id = lblid[0]
+            self.id2label = lblid[1]
 
 if __name__ == "__main__":
-    version = '1.0'
+    unitTest = False
+    version = '2'
     modelPath = "./Model/"
     saveModelName = 'marvinOrganizer_'+version
     loadModelName = 'marvinOrganizer_'+version
-    rootPath = "./Data/Christopher Liggio/"
     utils = MarvinOrganizerUtils()
-    
     data = MarvinOrganizerData()
-    data.preloadFolder(rootPath+"BMI Publisher/", classNum=0, label="BMI_Publisher")
-    data.preloadFolder(rootPath+"BMI Writer/", classNum=1, label="BMI_Writer")
-    # Laod the  model if it existst
-    marvin = MarvinOrganizer()
-    if os.path.exists(modelPath+loadModelName):
+    if unitTest is True:
+        rootPath = "./Data/Christopher Liggio/"
+        data.preloadFolder(rootPath+"BMI Publisher/", classNum=0, label="BMI_Publisher")
+        data.preloadFolder(rootPath+"BMI Writer/", classNum=1, label="BMI_Writer")
+    else:
+        rootPath = "/Fast/TrainData/RYLTY/Downloads/Organizer/"
+        data.loadBySource(rootPath)
+    # Load the  model if it exists
+    marvin = MarvinOrganizer(nLabels=data.numClasses)
+    if os.path.exists(modelPath+loadModelName+'.pth'):
+        print("Loading: ", modelPath+loadModelName)
         marvin.load(modelPath, loadModelName)
     else:
         marvin.addLabelDescription(data)
     
-    marvin.trainLoop(data,epoch=10000)
+    marvin.trainLoop(data,modelPath, saveModelName, epoch=2000) # 7000 Total
     marvin.save(modelPath, saveModelName)
-    x = torch.rand(1,1260).to()
+    x = torch.rand(1,1260)
     pred = marvin.predict(x)
     print(pred)
