@@ -18,6 +18,7 @@ import ryltyPdfParser
 from unidecode import unidecode
 from tqdm import tqdm
 ALPHABET = ['a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','q','s','t','u','v','w','x','y','z','0','1','2','3','4','5','6','7','8','9']
+CST_SAMPLE_LENTGHT = 256
 class MarvinOrganizerUtils:
     """Utilities class for the Marvin organizer"""
     pdfParser = ryltyPdfParser.ryltyNativePdfParser()
@@ -62,6 +63,9 @@ class MarvinOrganizerUtils:
             print(inst.args)
             print(inst)
             return emb
+        # Truncate the text since in most cases the column headers have the most importance
+        if len(txt) > CST_SAMPLE_LENTGHT:
+            txt = txt[:CST_SAMPLE_LENTGHT]
         emb = self.buildTextEmbedding(txt)
         return emb
     
@@ -202,16 +206,16 @@ class MarvinOrganizer(nn.Module):
         super(MarvinOrganizer, self).__init__()
         self.network = nn.Sequential(
             nn.Linear(inputSize, 512),
-            nn.ReLU(),
-            nn.Linear(512, 256),
-            nn.ReLU(),
-            nn.Linear(256,128),
-            nn.ReLU(),
-            nn.Linear(128, 64),
-            nn.ReLU(),
-            nn.Linear(64, 32),
-            nn.ReLU(),
-            nn.Linear(32, nLabels)
+            # nn.ReLU(),
+            # nn.Linear(512, 256),
+            # nn.ReLU(),
+            # nn.Linear(256,128),
+            # nn.ReLU(),
+            # nn.Linear(128, 64),
+            # nn.ReLU(),
+            # nn.Linear(64, 32),
+            # nn.ReLU(),
+            nn.Linear(512, nLabels)
         )
         self.softMax = nn.Softmax(dim=1)
         self.childrenList = list(self.children())
@@ -372,10 +376,10 @@ class MarvinOrganizer(nn.Module):
 
 if __name__ == "__main__":
     unitTest = False
-    version = '2'
+    version = 'v1'
     modelPath = "./Model/"
-    saveModelName = 'marvinOrganizer_'+version
-    loadModelName = 'marvinOrganizer_'+version
+    saveModelName = 'marvinOrganizer_'+str(CST_SAMPLE_LENTGHT)+"_"+version
+    loadModelName = 'marvinOrganizer_'+str(CST_SAMPLE_LENTGHT)+"_"+version
     utils = MarvinOrganizerUtils()
     data = MarvinOrganizerData()
     if unitTest is True:
@@ -393,7 +397,7 @@ if __name__ == "__main__":
     else:
         marvin.addLabelDescription(data)
     
-    marvin.trainLoop(data,modelPath, saveModelName, epoch=2000) # 7000 Total
+    marvin.trainLoop(data,modelPath, saveModelName, epoch=7000) # 7000 Total
     marvin.save(modelPath, saveModelName)
     x = torch.rand(1,1260)
     pred = marvin.predict(x)
