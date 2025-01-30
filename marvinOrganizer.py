@@ -17,8 +17,10 @@ import torch.utils.data
 import ryltyPdfParser
 from unidecode import unidecode
 from tqdm import tqdm
-ALPHABET = ['a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','q','s','t','u','v','w','x','y','z','0','1','2','3','4','5','6','7','8','9']
-CST_SAMPLE_LENTGHT = 256
+ALPHABET = ['a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','q','s','t','u','v','w','x','y','z','0','1','2','3','4','5','6','7','8','9',' ']
+
+CST_SAMPLE_LENTGHT = 128
+CST_VCT_TYPE = "DiGram"
 class MarvinOrganizerUtils:
     """Utilities class for the Marvin organizer"""
     pdfParser = ryltyPdfParser.ryltyNativePdfParser()
@@ -36,7 +38,8 @@ class MarvinOrganizerUtils:
         
         # build a feature vector based on digram statistics
         #1-build digramm list (single letter symbols are counted as well)
-        digrammList = [d for d in ALPHABET] + [d1+d2 for d1 in ALPHABET for d2 in ALPHABET]
+        digrammList = [d1+d2 for d1 in ALPHABET for d2 in ALPHABET]
+        
         # Remove special characters from text 
         txt = txt.replace('\n', ' ').lower()
         txt = unidecode(txt) # remove accents and special characters
@@ -49,12 +52,13 @@ class MarvinOrganizerUtils:
     def buildFileEmbedding(self, filename):
         txt = ""
         emb = []
+        ext = filename.split('.')[-1].lower()
         try:
-            if filename[-4:] == '.pdf':
+            if ext == 'pdf':
                 txt = self.readPdf(filename)
-            elif filename[-4:] == '.csv':
+            elif ext == 'csv':
                 txt = self.readCSV(filename)
-            elif filename[-4:] == '.xls' or filename[-5:] == '.xlsx':
+            elif ext == 'xls' or ext == 'xlsx':
                 txt = self.readXLS(filename)
         except Exception as inst:
             emb = []
@@ -67,7 +71,7 @@ class MarvinOrganizerUtils:
         if len(txt) > CST_SAMPLE_LENTGHT:
             txt = txt[:CST_SAMPLE_LENTGHT]
         emb = self.buildTextEmbedding(txt)
-        return emb
+        return emb, txt
     
     def readPdf(self, filename):
         self.pdfParser.loadPdf(filename)
@@ -86,11 +90,13 @@ class MarvinOrganizerUtils:
         return txt
 
 class MarvinOrganizerData(Dataset):
+
     def __init__(self):
 		# self.fileList = os.listdir(path)
 		# self.fileData = {f:None for f in self.fileList}
         self.utils = MarvinOrganizerUtils()
         self.data = []
+        self.txt = []
         self.label2id = {}
         self.id2label = {}
 
@@ -102,8 +108,10 @@ class MarvinOrganizerData(Dataset):
             classNum (int): id of the class the data belongs to 
             label (str): the name of the class in plain text
         """
-        jsonFile = path[:-1]+".json"
+        jsonFile = path[:-1] + "_" + str(CST_SAMPLE_LENTGHT) + "_" + CST_VCT_TYPE+".json"
+        txtFile = path[:-1] + "_" + str(CST_SAMPLE_LENTGHT)+ "_" + CST_VCT_TYPE+".txt"
         folderData = []
+        folderTxt = []
         if os.path.exists(jsonFile):
             with open(jsonFile, "r") as f:
                 folderData = json.load(f)
@@ -111,22 +119,29 @@ class MarvinOrganizerData(Dataset):
                 for d in folderData:
                     d["classNum"] = classNum
                     d["lbl"] = label
+            # with open(txtFile, "r") as f:
+            #     folderTxt = f.readlines()
         else:
             fileList = os.listdir(path)
-            # for f in tqdm(fileList, total=len(fileList)):
-            #     emb = utils.buildFileEmbedding(path+f)
-            #     folderData.append({"vct": list(emb), "classNum": classNum, "lbl": label})
             embList = list((Parallel(n_jobs=-1)(delayed(utils.buildFileEmbedding)(path + f) for f in fileList)))
-            folderData = [{"vct": list(v), "classNum": classNum, "lbl": label} for v in embList if (len(v) > 0) and (not np.isnan(v).any())]
+            if len(embList) > 0:
+                folderData = [{"txt":v[1], "vct": list(v[0]), "classNum": classNum, "lbl": label} for v in embList if (len(v) > 0) and (not np.isnan(v[0]).any())]
+                # folderTxt = [v[1] for v in embList if (len(v) > 0) ]
+               
+                # with open(txtFile, 'w') as f:
+                #     for s in folderTxt:
+                #         f.write(f"{s}\n")
+        if len(folderData) > 0:
+            self.vecSize = len(folderData[0]["vct"])
+            self.data = self.data + folderData
+            # self.txt = self.txt + folderTxt
+            self.label2id[label] = classNum
+            self.id2label[classNum] = label
             with open(jsonFile,"w") as f:
                 json.dump(folderData, f)
-        
-        self.data = self.data + folderData
-        self.label2id[label] = classNum
-        self.id2label[classNum] = label
 
     def loadAll(self, root):
-        """Load an entire directory tree at ones and infers the class name from the directory names.
+        """Load an entire directory tree and infers the class name from the directory names.
 
             This assumes a fixed directory tree: type/Source
             In this one the class is a composite of the file type and source: 
@@ -378,8 +393,8 @@ if __name__ == "__main__":
     unitTest = False
     version = 'v1'
     modelPath = "./Model/"
-    saveModelName = 'marvinOrganizer_'+str(CST_SAMPLE_LENTGHT)+"_"+version
-    loadModelName = 'marvinOrganizer_'+str(CST_SAMPLE_LENTGHT)+"_"+version
+    saveModelName = 'marvinOrganizer_'+str(CST_SAMPLE_LENTGHT)+"_Qgramm"+version
+    loadModelName = 'marvinOrganizer_'+str(CST_SAMPLE_LENTGHT)+"_Qgramm"+version
     utils = MarvinOrganizerUtils()
     data = MarvinOrganizerData()
     if unitTest is True:
@@ -390,7 +405,7 @@ if __name__ == "__main__":
         rootPath = "/Fast/TrainData/RYLTY/Downloads/Organizer/"
         data.loadBySource(rootPath)
     # Load the  model if it exists
-    marvin = MarvinOrganizer(nLabels=data.numClasses)
+    marvin = MarvinOrganizer(inputSize=data.vecSize, nLabels=data.numClasses)
     if os.path.exists(modelPath+loadModelName+'.pth'):
         print("Loading: ", modelPath+loadModelName)
         marvin.load(modelPath, loadModelName)
