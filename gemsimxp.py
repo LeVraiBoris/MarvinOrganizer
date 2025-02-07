@@ -15,7 +15,7 @@ def normalizeString(rawStr:str):
 	strN = re.sub(r"\W", " ", strN).lower().strip()
 	return strN
 
-def loadCorpus(path):
+def loadCorpusTxt(path):
 	txt = []
 	for jsonFile in glob.glob(path+'/*.json'):
 		with open(jsonFile, "r") as js:
@@ -26,17 +26,47 @@ def loadCorpus(path):
 	txt = [normalizeString(t) for t in txt]
 	return txt 
 
-model = FastText(vector_size=100)
-corpus = loadCorpus(jsPath)
-# build the vocabulary
-model.build_vocab(corpus_iterable=corpus)
-model.build_vocab(corpus_iterable=corpus)
+def loadCorpusData(path):
+	allData = []
+	for jsonFile in glob.glob(path+'/*.json'):
+		with open(jsonFile, "r") as js:
+			jsData = json.load(js)
+		if len(jsData) > 0:
+			allData = allData + jsData
+	return allData
 
-# train the model
-model.train(
-    corpus_iterable=corpus, epochs=5000,
-    total_examples=model.corpus_count, total_words=model.corpus_total_words,
-)
-model.save("./Model/marvinFastTxt.gs")
-vct = model.wv["kitty kat"]
-print(vct)
+
+corpusData = loadCorpusData(jsPath)
+sortedFiles = []
+for jf in corpusData:
+	newClass = True
+	for cls in sortedFiles:
+		if jf["vct"] == cls["vct"]:
+			cls["fileList"].append(jf["file"])
+			newClass = False
+	if newClass is True:
+		sortedFiles.append({"vct": jf["vct"], "fileList": [jf["file"]]})
+
+with open(jsPath+"log.txt", 'a') as f:
+	for sd in sortedFiles:
+		f.write("\n ========= \n")
+		for d in sd["fileList"]:
+			f.write(d+"\n")
+
+##################
+# Train a Gensim fastext model on the corpus
+# model = FastText.load("./Model/marvinFastTxt.gs")
+# corpus = loadCorpusTxt(jsPath)
+# # build the vocabulary
+# model.build_vocab(corpus_iterable=corpus)
+# model.build_vocab(corpus_iterable=corpus)
+
+# # train the model
+# model.train(
+#     corpus_iterable=corpus, epochs=5000,
+#     total_examples=model.corpus_count, total_words=model.corpus_total_words,
+# )
+# model.save("./Model/marvinFastTxt.gs")
+# vct = model.wv["kitty kat"]
+# print(vct)
+
