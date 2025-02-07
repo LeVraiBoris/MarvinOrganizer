@@ -26,12 +26,13 @@ CST_SAMPLE_LENTGHT = 256
 CST_VCT_TYPE = "FastTxtEigV"
 class MarvinOrganizerUtils:
     """Utilities class for the Marvin organizer"""
-    pdfParser = ryltyPdfParser.ryltyNativePdfParser()
+    # We skip pdf for now
+    # pdfParser = ryltyPdfParser.ryltyNativePdfParser()
 
     def __init__(self):
         self.fastTxtModel = FastText.load("./Model/marvinFastTxt.gs")
         # This is a dirty hack against some XL errors 
-        # Set this to some value (eg. False) 
+        # Set it to some value (eg. False) to deactivate
         self.fixXLErr14 = None
 
     def normalizeString(self, rawStr:str):
@@ -52,35 +53,10 @@ class MarvinOrganizerUtils:
         embMtx = np.array(embMtx)
         MM = np.matmul(embMtx.T, embMtx)
         eigVal, eigVct = np.linalg.eig(MM)
-        # print("-----")
-        # print(txt)
-        # print(eigVct[:,0])
+        
 
         return np.real(eigVct[:,0])
     
-        # def countDigramms(txt, k):
-        #     """Return the number of occurences of k in txt."""
-        #     # Count digramms 
-        #     count = 0
-        #     if len(k)==1:
-        #         regEx= re.compile(" "+k+" ")
-        #     else:
-        #         regEx= re.compile(k)
-        #     count =len(regEx.findall(txt))
-        #     return count
-        
-        # # build a feature vector based on digram statistics
-        # #1-build digramm list (single letter symbols are counted as well)
-        # digrammList = [d1+d2 for d1 in ALPHABET for d2 in ALPHABET]
-        
-        # # Remove special characters from text 
-        # txt = txt.replace('\n', ' ').lower()
-        # txt = unidecode(txt) # remove accents and special characters
-        # digrammCounts = [countDigramms(txt, k) for k in digrammList]
-        # #  digrammCounts = list(Parallel(n_jobs=-1)(delayed(countDigramms)(txt, k) for k in digrammList))
-        # digrammCountsArr = np.array(digrammCounts)
-        # embeddings = digrammCountsArr/np.sum(digrammCountsArr)
-        # return embeddings
     def rebuildDFHeader(self, df:pd.DataFrame):
         """Check if the data frame contains a header before the genuine data and drops de corresponding lines
 
@@ -102,7 +78,7 @@ class MarvinOrganizerUtils:
             valCount = [np.sum(np.logical_not(pd.isna(np.array(df.iloc[r])))) for r in range(df.shape[0])]
             # We assume that the longest list is the most likely to be the header (especially if we find it close to the top of the file)
             firstRow = np.argmax(valCount)
-            if (firstRow > 0) and (firstRow < len(valCount) - 1):
+            if (firstRow > 0) and (firstRow < len(valCount) - firstRow):
                 if (valCount[firstRow+1] - valCount[firstRow-1] <= 2):
                     firstRow = 0
                 else:
@@ -130,6 +106,13 @@ class MarvinOrganizerUtils:
             print(inst)
             return emb
         if df is not None:
+            cols = list(df.columns)
+            cols = [str(c) for c in cols]
+            fixme = False
+            for c in cols:
+                if "Unnamed" in c:
+                    fixme = True
+                break
             txt = df.to_string(index=False)
         # Truncate the text since in most cases the column headers have the most importance
         
@@ -172,8 +155,7 @@ class MarvinOrganizerUtils:
         return df
 
     def readXLS (self, filename):
-
-        # This is a potential patch for stylesheet ralted errors taken from:
+        # This is a potential patch for stylesheet related errors taken from:
         # https://stackoverflow.com/questions/50236928/openpyxl-valueerror-max-value-is-14-when-using-load-workbook/71526058#71526058
         # IMPORTANT, you must do this before importing openpyxl
         from unittest import mock
@@ -196,8 +178,6 @@ class MarvinOrganizerUtils:
 class MarvinOrganizerData(Dataset):
 
     def __init__(self):
-		# self.fileList = os.listdir(path)
-		# self.fileData = {f:None for f in self.fileList}
         self.utils = MarvinOrganizerUtils()
         self.data = []
         self.txt = []
@@ -400,8 +380,34 @@ class MarvinOrganizer():
             sourcesProba = self.vectorSourcesProba[key][lbl] * self.vectorProba[key] / self.sourceProba[lbl]
             return [lbl], [sourcesProba], [bestScore]
 
+    def toJson(self, jsonFile:str):
+        """Save the current configuration to a json file
 
+        Args:
+            jsonFile (str): path to the json file
+        """
+        model = {"sourceVectors": self.sourceVectors,
+                 "sourceProbas": self.sourceProba,
+                 "vectorProba": self.vectorProba,
+                 "vectorSources": self.vectorSources,
+                 "vectorSourcesProba": self.vectorSourcesProba} 
+        with open(jsonFile,'w') as f:
+            json.dump(model, f)
+          
 
+    def fromJson(self, jsonFile:str):
+        """Save the current configuration to a json file
+
+        Args:
+            jsonFile (str): path to the json file
+        """
+        with open(jsonFile,'r') as f:
+            model = json.load(f)
+        self.sourceVectors= model["sourceVectors"]
+        self.sourceProba = model["sourceProbas"]
+        self.vectorProba = model["vectorProba"]
+        self.vectorSources = model["vectorSources"]
+        self.vectorSourcesProba = model["vectorSourcesProba"]
 
 class MarvinOrganizerModel(nn.Module):
     # Batch size when learning
@@ -600,15 +606,13 @@ if __name__ == "__main__":
     modelPath = "./Model/"
     saveModelName = 'marvinOrganizer_'+str(CST_SAMPLE_LENTGHT)+"_FastTxt"+version
     loadModelName = 'marvinOrganizer_'+str(CST_SAMPLE_LENTGHT)+"_FastTxt"+version
+    signatureModelName = 'marvinSigns_'+str(CST_SAMPLE_LENTGHT)+CST_VCT_TYPE+version+".json"
     utils = MarvinOrganizerUtils()
     data = MarvinOrganizerData()
     if unitTest is True:
         rootPath = "./Data/Christopher Liggio/"
         data.preloadFolder(rootPath+"BMI Publisher/", classNum=0, label="BMI_Publisher")
         data.preloadFolder(rootPath+"BMI Writer/", classNum=1, label="BMI_Writer")
-    else:
-        rootPath = "/Fast/TrainData/RYLTY/Downloads/Organizer/"
-        data.loadBySource(rootPath)
     if marvinNetTest is True:
         # Load the  model if it exists
         marvin = MarvinOrganizer(inputSize=data.vecSize, nLabels=data.numClasses)
@@ -616,13 +620,21 @@ if __name__ == "__main__":
             print("Loading: ", modelPath+loadModelName)
             marvin.load(modelPath, loadModelName)
         else:
+            rootPath = "/Fast/TrainData/RYLTY/Downloads/Organizer/"
+            data.loadBySource(rootPath)
             marvin.addLabelDescription(data)
-    
         marvin.trainLoop(data,modelPath, saveModelName, epoch=7000) # 7000 Total
         marvin.save(modelPath, saveModelName)
     if marvinMatchTest is True:
         marvin = MarvinOrganizer()
-        marvin.fromDataset(data)
+        if os.path.exists(modelPath+signatureModelName): 
+            marvin.fromJson(modelPath+signatureModelName)
+        else:
+            rootPath = "/Fast/TrainData/RYLTY/Downloads/Organizer/"
+            data.loadBySource(rootPath)
+            marvin.fromDataset(data)
+            marvin.toJson(modelPath+signatureModelName)
+
         rootPath = "./Data/Christopher Liggio/"
         print("+=====================================+")
         print(" BMI Publisher: ")
