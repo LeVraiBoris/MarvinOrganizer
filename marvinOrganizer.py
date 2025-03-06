@@ -16,58 +16,118 @@ from torch.utils.data import Dataset, DataLoader
 import torch.utils.data
 import ryltyPdfParser
 from unidecode import unidecode
+from gensim.models.fasttext import FastText
 from tqdm import tqdm
-ALPHABET = ['a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','q','s','t','u','v','w','x','y','z','0','1','2','3','4','5','6','7','8','9']
+from scipy.special import softmax
+
+ALPHABET = ['a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','q','s','t','u','v','w','x','y','z','0','1','2','3','4','5','6','7','8','9',' ']
+
 CST_SAMPLE_LENTGHT = 256
+CST_VCT_TYPE = "FastTxtEigV"
 class MarvinOrganizerUtils:
     """Utilities class for the Marvin organizer"""
-    pdfParser = ryltyPdfParser.ryltyNativePdfParser()
+    # We skip pdf for now
+    # pdfParser = ryltyPdfParser.ryltyNativePdfParser()
+
+    def __init__(self):
+        self.fastTxtModel = FastText.load("./Model/marvinFastTxt.gs")
+        # This is a dirty hack against some XL errors 
+        # Set it to some value (eg. False) to deactivate
+        self.fixXLErr14 = None
+
+    def normalizeString(self, rawStr:str):
+        """Remove accents, non alphnumeric characters, normalize white spaces and to lower case"""
+        strN = unidecode(rawStr)
+        strN = re.sub(r"\W", " ", strN).lower().strip()
+        strN = " ".join(strN.split())
+        return strN
+
     def buildTextEmbedding(self,txt):
-        def countDigramms(txt, k):
-            """Return the number of occurences of k in txt."""
-            # Count digramms 
-            count = 0
-            if len(k)==1:
-                regEx= re.compile(" "+k+" ")
-            else:
-                regEx= re.compile(k)
-            count =len(regEx.findall(txt))
-            return count
+        if len(txt.strip()) == 0:
+            return None
+        wLst = txt.split()
+        embMtx  = []
+        for w in wLst:
+            emb = self.fastTxtModel.wv[w]
+            embMtx.append(emb)
+        embMtx = np.array(embMtx)
+        MM = np.matmul(embMtx.T, embMtx)
+        eigVal, eigVct = np.linalg.eig(MM)
         
-        # build a feature vector based on digram statistics
-        #1-build digramm list (single letter symbols are counted as well)
-        digrammList = [d for d in ALPHABET] + [d1+d2 for d1 in ALPHABET for d2 in ALPHABET]
-        # Remove special characters from text 
-        txt = txt.replace('\n', ' ').lower()
-        txt = unidecode(txt) # remove accents and special characters
-        digrammCounts = [countDigramms(txt, k) for k in digrammList]
-        #  digrammCounts = list(Parallel(n_jobs=-1)(delayed(countDigramms)(txt, k) for k in digrammList))
-        digrammCountsArr = np.array(digrammCounts)
-        embeddings = digrammCountsArr/np.sum(digrammCountsArr)
-        return embeddings
+
+        return np.real(eigVct[:,0])
     
+    def rebuildDFHeader(self, df:pd.DataFrame):
+        """Check if the data frame contains a header before the genuine data and drops de corresponding lines
+
+        Args:
+            df (pd.DataFrame): dataframe to fix
+        Returns:
+            (pd.DataFrame): the same data frame with incomplete lines at the beginnning taken out.
+        """
+        cols = list(df.columns)
+        cols = [str(c) for c in cols]
+        fixme = False
+        for c in cols:
+            if "Unnamed" in c:
+                fixme = True
+                break
+        if fixme is True:
+            firstRow = 0
+            # Count the number of of items on each line
+            valCount = [np.sum(np.logical_not(pd.isna(np.array(df.iloc[r])))) for r in range(df.shape[0])]
+            # We assume that the longest list is the most likely to be the header (especially if we find it close to the top of the file)
+            firstRow = np.argmax(valCount)
+            if (firstRow > 0) and (firstRow < len(valCount) - firstRow):
+                if (valCount[firstRow+1] - valCount[firstRow-1] <= 2):
+                    firstRow = 0
+                else:
+                    realHeaders = df.iloc[firstRow]
+                    df = df.iloc[firstRow+1:]
+                    df.columns = realHeaders
+        return df
+
     def buildFileEmbedding(self, filename):
         txt = ""
+        df = None
         emb = []
+        ext = filename.split('.')[-1].lower()
         try:
-            if filename[-4:] == '.pdf':
-                txt = self.readPdf(filename)
-            elif filename[-4:] == '.csv':
-                txt = self.readCSV(filename)
-            elif filename[-4:] == '.xls' or filename[-5:] == '.xlsx':
-                txt = self.readXLS(filename)
+            # if ext == 'pdf':
+            #     txt = self.readPdf(filename)
+            if ext == 'csv':
+                df = self.readCSV(filename)
+            elif ext == 'xls' or ext == 'xlsx':
+                df = self.readXLS(filename)
         except Exception as inst:
             emb = []
             print("Could not read : ", filename)
             print(type(inst))
-            print(inst.args)
             print(inst)
             return emb
+        if df is not None:
+            cols = list(df.columns)
+            cols = [str(c) for c in cols]
+            fixme = False
+            for c in cols:
+                if "Unnamed" in c:
+                    fixme = True
+                break
+            txt = df.to_string(index=False)
         # Truncate the text since in most cases the column headers have the most importance
-        if len(txt) > CST_SAMPLE_LENTGHT:
+        
+        # The texts is normalized prior to truncation when relevant
+        if len(txt) > 2 * CST_SAMPLE_LENTGHT: # no need to normalize 1Gb of text to grab a few hundred characters 
+            txt = txt[:2 * CST_SAMPLE_LENTGHT]
+        txt = utils.normalizeString(txt)
+        
+        if len(txt) > CST_SAMPLE_LENTGHT:    
             txt = txt[:CST_SAMPLE_LENTGHT]
+        # if df is not None and df.shape[0] > 0:
+        #     df = self.rebuildDFHeader(df)
+        #     txt = " ".join([str(c) for c in df.columns])
         emb = self.buildTextEmbedding(txt)
-        return emb
+        return emb, txt, filename
     
     def readPdf(self, filename):
         self.pdfParser.loadPdf(filename)
@@ -75,22 +135,52 @@ class MarvinOrganizerUtils:
         return txt
     
     def readCSV(self, filename):
-        txt = ''
-        with open(filename, "r", encoding="utf8", errors='ignore') as f:
-            txt = f.read()
-        return txt
+        sepLst=[',',';','\t']
+        df = None
+        for s in sepLst:
+            if df is None:
+                try:
+                    df = pd.read_csv(filename, sep=s,engine='python', encoding="utf_8")
+                except:
+                    try:
+                        df = pd.read_csv(filename, sep=s,engine='c', encoding="utf_8")
+                    except:
+                        try:
+                            df = pd.read_csv(filename, sep=s,engine='python', encoding='latin_1')
+                        except:
+                            try:
+                                df = pd.read_csv(filename, sep=s,engine='c', encoding='latin_1')
+                            except:
+                                df = None
+        return df
 
     def readXLS (self, filename):
-        df = pd.read_excel(filename)
-        txt = df.to_string(index=False)
-        return txt
+        # This is a potential patch for stylesheet related errors taken from:
+        # https://stackoverflow.com/questions/50236928/openpyxl-valueerror-max-value-is-14-when-using-load-workbook/71526058#71526058
+        # IMPORTANT, you must do this before importing openpyxl
+        from unittest import mock
+        # Set max font family value to 100
+        if self.fixXLErr14 is None:
+            self.fixXLErr14 = mock.patch('openpyxl.styles.fonts.Font.family.max', new=100)
+
+        self.fixXLErr14.start()
+        # import openpyxl
+        # openpyxl.open('my-bugged-worksheet.xlsx') # this works now!
+
+        df = None
+        try:
+            df = pd.read_excel(filename)
+        except:
+            df = pd.read_excel(filename, engine='openpyxl')
+        self.fixXLErr14.stop()
+        return df
 
 class MarvinOrganizerData(Dataset):
+
     def __init__(self):
-		# self.fileList = os.listdir(path)
-		# self.fileData = {f:None for f in self.fileList}
         self.utils = MarvinOrganizerUtils()
         self.data = []
+        self.txt = []
         self.label2id = {}
         self.id2label = {}
 
@@ -102,8 +192,10 @@ class MarvinOrganizerData(Dataset):
             classNum (int): id of the class the data belongs to 
             label (str): the name of the class in plain text
         """
-        jsonFile = path[:-1]+".json"
+        jsonFile = path[:-1] + "_" + str(CST_SAMPLE_LENTGHT) + "_" + CST_VCT_TYPE+".json"
+        txtFile = path[:-1] + "_" + str(CST_SAMPLE_LENTGHT)+ "_" + CST_VCT_TYPE+".txt"
         folderData = []
+        folderTxt = []
         if os.path.exists(jsonFile):
             with open(jsonFile, "r") as f:
                 folderData = json.load(f)
@@ -111,22 +203,30 @@ class MarvinOrganizerData(Dataset):
                 for d in folderData:
                     d["classNum"] = classNum
                     d["lbl"] = label
+            # with open(txtFile, "r") as f:
+            #     folderTxt = f.readlines()
         else:
             fileList = os.listdir(path)
-            # for f in tqdm(fileList, total=len(fileList)):
-            #     emb = utils.buildFileEmbedding(path+f)
-            #     folderData.append({"vct": list(emb), "classNum": classNum, "lbl": label})
             embList = list((Parallel(n_jobs=-1)(delayed(utils.buildFileEmbedding)(path + f) for f in fileList)))
-            folderData = [{"vct": list(v), "classNum": classNum, "lbl": label} for v in embList if (len(v) > 0) and (not np.isnan(v).any())]
+            if len(embList) > 0:
+                folderData = [{ "file": v[2], "txt":v[1], "vct": [float(i) for i in v[0]], "classNum": classNum, "lbl": label} for v in embList if (len(v) > 0) and v[0] is not None]
+                # folderTxt = [v[1] for v in embList if (len(v) > 0) ]
+               
+                # with open(txtFile, 'w') as f:
+                #     for s in folderTxt:
+                #         f.write(f"{s}\n")
+
+        if len(folderData) > 0:
+            self.vecSize = len(folderData[0]["vct"])
+            self.data = self.data + folderData
+            # self.txt = self.txt + folderTxt
+            self.label2id[label] = classNum
+            self.id2label[classNum] = label
             with open(jsonFile,"w") as f:
                 json.dump(folderData, f)
-        
-        self.data = self.data + folderData
-        self.label2id[label] = classNum
-        self.id2label[classNum] = label
 
     def loadAll(self, root):
-        """Load an entire directory tree at ones and infers the class name from the directory names.
+        """Load an entire directory tree and infers the class name from the directory names.
 
             This assumes a fixed directory tree: type/Source
             In this one the class is a composite of the file type and source: 
@@ -139,6 +239,7 @@ class MarvinOrganizerData(Dataset):
             for d2 in os.listdir(root+d1):
                 self.preloadFolder(root+d1+"/"+d2, classNum=classIdx, label=d1+"-"+d2)
                 classIdx += 1
+   
     def loadByType(self, root):
         """Load an entire directory tree at ones and sort the data by type.
 
@@ -184,8 +285,131 @@ class MarvinOrganizerData(Dataset):
 
         cls = self.data[idx]["classNum"] # Class Index
         return vct, cls
+    
+    def len(self):
+        return len(self.data)
+    
 
-class MarvinOrganizer(nn.Module):
+class MarvinOrganizer():
+
+    def __init__(self):
+        self.utils = MarvinOrganizerUtils()
+        pass
+
+    def loadModel(self, modelFile:str):
+        with open(modelFile, 'r') as f:
+            self.formatModels = json.load(f)
+
+    def fromDataset(self, dataset:MarvinOrganizerData):
+        self.id2label= dataset.id2label
+        self.label2id = dataset.label2id
+        self.sourceVectors = {k:[] for k in self.label2id.keys()}
+        self.sourceProba = {k:0 for k in self.label2id.keys()}
+        self.vectorSources = {}
+        self.vectorSourcesProba = {}
+        self.vectorProba = {}
+        print("Loading Building model ...")
+        for s in tqdm(dataset.data, total=dataset.__len__()):
+            v = s['vct']
+            lbl = s['lbl']
+            k = str(v)
+            self.sourceProba[lbl] += 1
+            self.sourceVectors[lbl] += [v]
+            if k in self.vectorSources.keys():
+                if lbl not in self.vectorSources[k]:
+                    self.vectorSources[k] += [lbl]
+                    self.vectorSourcesProba[k][lbl] = 1
+                else: 
+                    self.vectorSourcesProba[k][lbl] += 1
+                self.vectorProba[k] += 1
+            else:
+                self.vectorSources[k] = [lbl]
+                self.vectorSourcesProba[k] = {lbl:1}
+                self.vectorProba[k] = 1
+ 
+        # Compute the prior probability of each class based on the frequency in the test dataset
+        srcProba = [self.sourceProba[k] for k in self.sourceProba.keys()]
+        srcProba = np.exp(srcProba/np.sum(srcProba)) # Data is normalized to a unit vector to keep it numericaly behaved
+        srcProba = srcProba/np.sum(srcProba)
+        for i, k in enumerate(self.sourceProba.keys()):
+            self.sourceProba[k] = srcProba[i]
+        # Compute the prior probability of each class
+        vctCnt = [self.vectorProba[k] for k in self.vectorProba.keys()]
+        vctCnt = np.exp(vctCnt / np.sum(vctCnt))# Data is normalized to a unit vector to keep it numericaly behaved
+        vctCnt = vctCnt / np.sum(vctCnt)
+        for (i,k) in enumerate(self.vectorProba.keys()):
+            self.vectorProba[k] = vctCnt[i]
+        # Compute the conditionnal probablility P(Lbl|Vct)
+        for srcK in self.vectorSources.keys():
+            lblsCnts = [self.vectorSourcesProba[srcK][lbl] for lbl in self.vectorSourcesProba[srcK].keys()]
+            lblsCnts = np.exp(lblsCnts / np.sum(lblsCnts))
+            lblsCnts = lblsCnts / np.sum(lblsCnts)
+            for i, k in enumerate(self.vectorSourcesProba[srcK].keys()):
+                self.vectorSourcesProba[srcK][k] = lblsCnts[i]
+    
+    def getSources(self, fileName:str):
+        """Retrieve the royalty sources based on the format signature. 
+
+        Args:
+            fileName (str): path to the file to process
+
+        Returns:
+            (list): list of labels (royalty sources)
+            (list): posterior probability of each hypothesis
+        """
+        emb, _, _ = self.utils.buildFileEmbedding(fileName)
+        if len(emb) == 0 or np.isnan(np.any(emb)):
+            return (None, None)
+        embStr = str(emb)
+        if embStr in self.vectorSources.keys():
+            sources = self.vectorSources[embStr]
+            # Compute the posterior ofthe match based on the computed statistics on the training data set
+            sourcesProba = [(self.vectorSourcesProba[embStr][k] * self.vectorProba[embStr]) / self.sourceProba[k] for k in sources]
+            return sources, sourcesProba, [1 for s in sources]
+        else:
+            # Get the closest match
+            bestScore = 0
+            lbl = None
+            for s in self.sourceVectors.keys():
+                for v in self.sourceVectors[s]:
+                    score = np.dot(emb/np.linalg.norm(emb),v/np.linalg.norm(v))
+                    if score>bestScore:
+                        bestScore = score
+                        lbl = s
+                        key = str(v)
+            sourcesProba = self.vectorSourcesProba[key][lbl] * self.vectorProba[key] / self.sourceProba[lbl]
+            return [lbl], [sourcesProba], [bestScore]
+
+    def toJson(self, jsonFile:str):
+        """Save the current configuration to a json file
+
+        Args:
+            jsonFile (str): path to the json file
+        """
+        model = {"sourceVectors": self.sourceVectors,
+                 "sourceProbas": self.sourceProba,
+                 "vectorProba": self.vectorProba,
+                 "vectorSources": self.vectorSources,
+                 "vectorSourcesProba": self.vectorSourcesProba} 
+        with open(jsonFile,'w') as f:
+            json.dump(model, f)
+          
+
+    def fromJson(self, jsonFile:str):
+        """Save the current configuration to a json file
+
+        Args:
+            jsonFile (str): path to the json file
+        """
+        with open(jsonFile,'r') as f:
+            model = json.load(f)
+        self.sourceVectors= model["sourceVectors"]
+        self.sourceProba = model["sourceProbas"]
+        self.vectorProba = model["vectorProba"]
+        self.vectorSources = model["vectorSources"]
+        self.vectorSourcesProba = model["vectorSourcesProba"]
+
+class MarvinOrganizerModel(nn.Module):
     # Batch size when learning
     batchSize = 16
     learningRate = 1e-3
@@ -376,29 +600,57 @@ class MarvinOrganizer(nn.Module):
 
 if __name__ == "__main__":
     unitTest = False
+    marvinNetTest = False
+    marvinMatchTest = True
     version = 'v1'
     modelPath = "./Model/"
-    saveModelName = 'marvinOrganizer_'+str(CST_SAMPLE_LENTGHT)+"_"+version
-    loadModelName = 'marvinOrganizer_'+str(CST_SAMPLE_LENTGHT)+"_"+version
+    saveModelName = 'marvinOrganizer_'+str(CST_SAMPLE_LENTGHT)+"_FastTxt"+version
+    loadModelName = 'marvinOrganizer_'+str(CST_SAMPLE_LENTGHT)+"_FastTxt"+version
+    signatureModelName = 'marvinSigns_'+str(CST_SAMPLE_LENTGHT)+CST_VCT_TYPE+version+".json"
     utils = MarvinOrganizerUtils()
     data = MarvinOrganizerData()
     if unitTest is True:
         rootPath = "./Data/Christopher Liggio/"
         data.preloadFolder(rootPath+"BMI Publisher/", classNum=0, label="BMI_Publisher")
         data.preloadFolder(rootPath+"BMI Writer/", classNum=1, label="BMI_Writer")
-    else:
-        rootPath = "/Fast/TrainData/RYLTY/Downloads/Organizer/"
-        data.loadBySource(rootPath)
-    # Load the  model if it exists
-    marvin = MarvinOrganizer(nLabels=data.numClasses)
-    if os.path.exists(modelPath+loadModelName+'.pth'):
-        print("Loading: ", modelPath+loadModelName)
-        marvin.load(modelPath, loadModelName)
-    else:
-        marvin.addLabelDescription(data)
-    
-    marvin.trainLoop(data,modelPath, saveModelName, epoch=7000) # 7000 Total
-    marvin.save(modelPath, saveModelName)
-    x = torch.rand(1,1260)
-    pred = marvin.predict(x)
-    print(pred)
+    if marvinNetTest is True:
+        # Load the  model if it exists
+        marvin = MarvinOrganizer(inputSize=data.vecSize, nLabels=data.numClasses)
+        if os.path.exists(modelPath+loadModelName+'.pth'):
+            print("Loading: ", modelPath+loadModelName)
+            marvin.load(modelPath, loadModelName)
+        else:
+            rootPath = "/Fast/TrainData/RYLTY/Downloads/Organizer/"
+            data.loadBySource(rootPath)
+            marvin.addLabelDescription(data)
+        marvin.trainLoop(data,modelPath, saveModelName, epoch=7000) # 7000 Total
+        marvin.save(modelPath, saveModelName)
+    if marvinMatchTest is True:
+        marvin = MarvinOrganizer()
+        if os.path.exists(modelPath+signatureModelName): 
+            marvin.fromJson(modelPath+signatureModelName)
+        else:
+            rootPath = "/Fast/TrainData/RYLTY/Downloads/Organizer/"
+            data.loadBySource(rootPath)
+            marvin.fromDataset(data)
+            marvin.toJson(modelPath+signatureModelName)
+
+        rootPath = "./Data/Christopher Liggio/"
+        print("+=====================================+")
+        print(" BMI Publisher: ")
+        for f in os.listdir(rootPath+"BMI_Publisher/"):
+            src, sourceScore, matchScore = marvin.getSources(rootPath+"BMI_Publisher/"+f)
+            print(f)
+            for i,s in enumerate(src):
+                print(s," :",sourceScore[i],", ", matchScore[i])
+        print("+=====================================+")
+        print(" BMI Writer: ")
+
+        for f in os.listdir(rootPath+"BMI_Writer/"):
+            src, sourceScore, matchScore = marvin.getSources(rootPath+"BMI_Writer/"+f)
+            print(f)
+            for i,s in enumerate(src):
+                print(s," :",sourceScore[i],", ", matchScore[i])
+        
+        
+
