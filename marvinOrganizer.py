@@ -20,9 +20,11 @@ from gensim.models.fasttext import FastText
 from tqdm import tqdm
 from scipy.special import softmax
 
+import gemsimUtils
+
 ALPHABET = ['a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','q','s','t','u','v','w','x','y','z','0','1','2','3','4','5','6','7','8','9',' ']
 
-CST_SAMPLE_LENTGHT = 256
+CST_MODEL_VERSION = "V1"
 CST_VCT_TYPE = "FastTxtEigV"
 class MarvinOrganizerUtils:
     """Utilities class for the Marvin organizer"""
@@ -50,11 +52,11 @@ class MarvinOrganizerUtils:
         for w in wLst:
             emb = self.fastTxtModel.wv[w]
             embMtx.append(emb)
+
         embMtx = np.array(embMtx)
+       
         MM = np.matmul(embMtx.T, embMtx)
         eigVal, eigVct = np.linalg.eig(MM)
-        
-
         return np.real(eigVct[:,0])
     
     def rebuildDFHeader(self, df:pd.DataFrame):
@@ -108,25 +110,8 @@ class MarvinOrganizerUtils:
         if df is not None:
             cols = list(df.columns)
             cols = [str(c) for c in cols]
-            fixme = False
-            for c in cols:
-                if "Unnamed" in c:
-                    fixme = True
-                break
-            txt = df.to_string(index=False)
-        # Truncate the text since in most cases the column headers have the most importance
-        
-        # The texts is normalized prior to truncation when relevant
-        if len(txt) > 2 * CST_SAMPLE_LENTGHT: # no need to normalize 1Gb of text to grab a few hundred characters 
-            txt = txt[:2 * CST_SAMPLE_LENTGHT]
-        txt = utils.normalizeString(txt)
-        
-        if len(txt) > CST_SAMPLE_LENTGHT:    
-            txt = txt[:CST_SAMPLE_LENTGHT]
-        # if df is not None and df.shape[0] > 0:
-        #     df = self.rebuildDFHeader(df)
-        #     txt = " ".join([str(c) for c in df.columns])
-        emb = self.buildTextEmbedding(txt)
+            txt = " ".join(cols)
+            emb = self.buildTextEmbedding(txt)
         return emb, txt, filename
     
     def readPdf(self, filename):
@@ -192,8 +177,8 @@ class MarvinOrganizerData(Dataset):
             classNum (int): id of the class the data belongs to 
             label (str): the name of the class in plain text
         """
-        jsonFile = path[:-1] + "_" + str(CST_SAMPLE_LENTGHT) + "_" + CST_VCT_TYPE+".json"
-        txtFile = path[:-1] + "_" + str(CST_SAMPLE_LENTGHT)+ "_" + CST_VCT_TYPE+".txt"
+        jsonFile = path[:-1] + "_" + str(CST_MODEL_VERSION) + "_" + CST_VCT_TYPE+".json"
+        txtFile = path[:-1] + "_" + str(CST_MODEL_VERSION)+ "_" + CST_VCT_TYPE+".txt"
         folderData = []
         folderTxt = []
         if os.path.exists(jsonFile):
@@ -209,12 +194,10 @@ class MarvinOrganizerData(Dataset):
             fileList = os.listdir(path)
             embList = list((Parallel(n_jobs=-1)(delayed(utils.buildFileEmbedding)(path + f) for f in fileList)))
             if len(embList) > 0:
-                folderData = [{ "file": v[2], "txt":v[1], "vct": [float(i) for i in v[0]], "classNum": classNum, "lbl": label} for v in embList if (len(v) > 0) and v[0] is not None]
-                # folderTxt = [v[1] for v in embList if (len(v) > 0) ]
-               
-                # with open(txtFile, 'w') as f:
-                #     for s in folderTxt:
-                #         f.write(f"{s}\n")
+                folderData = [{ "file": v[2],
+                                "txt":v[1],
+                                "vct": [float(i) for i in v[0]],
+                                "classNum": classNum, "lbl": label} for v in embList if (len(v) > 0) and v[0] is not None]
 
         if len(folderData) > 0:
             self.vecSize = len(folderData[0]["vct"])
@@ -363,7 +346,7 @@ class MarvinOrganizer():
         embStr = str(emb)
         if embStr in self.vectorSources.keys():
             sources = self.vectorSources[embStr]
-            # Compute the posterior ofthe match based on the computed statistics on the training data set
+            # Compute the posterior of the match based on the computed statistics on the training data set
             sourcesProba = [(self.vectorSourcesProba[embStr][k] * self.vectorProba[embStr]) / self.sourceProba[k] for k in sources]
             return sources, sourcesProba, [1 for s in sources]
         else:
@@ -409,8 +392,7 @@ class MarvinOrganizer():
         self.vectorSources = model["vectorSources"]
         self.vectorSourcesProba = model["vectorSourcesProba"]
 
-class MarvinOrganizerModel(nn.Module):
-    # Batch size when learning
+
     batchSize = 16
     learningRate = 1e-3
     # Loss regularization
@@ -599,37 +581,39 @@ class MarvinOrganizerModel(nn.Module):
             self.id2label = lblid[1]
 
 if __name__ == "__main__":
-    unitTest = False
-    marvinNetTest = False
-    marvinMatchTest = True
+    # Select task
+    marvinMatchTest = False
+    trainFastTxt = True
     version = 'v1'
     modelPath = "./Model/"
-    saveModelName = 'marvinOrganizer_'+str(CST_SAMPLE_LENTGHT)+"_FastTxt"+version
-    loadModelName = 'marvinOrganizer_'+str(CST_SAMPLE_LENTGHT)+"_FastTxt"+version
-    signatureModelName = 'marvinSigns_'+str(CST_SAMPLE_LENTGHT)+CST_VCT_TYPE+version+".json"
+    saveModelName = 'marvinOrganizer_'+"_FastTxt"+version
+    loadModelName = 'marvinOrganizer_'+"_FastTxt"+version
+    signatureModelName = 'marvinSigns_'+CST_VCT_TYPE+version+".json"
     utils = MarvinOrganizerUtils()
     data = MarvinOrganizerData()
-    if unitTest is True:
-        rootPath = "./Data/Christopher Liggio/"
-        data.preloadFolder(rootPath+"BMI Publisher/", classNum=0, label="BMI_Publisher")
-        data.preloadFolder(rootPath+"BMI Writer/", classNum=1, label="BMI_Writer")
-    if marvinNetTest is True:
-        # Load the  model if it exists
-        marvin = MarvinOrganizer(inputSize=data.vecSize, nLabels=data.numClasses)
-        if os.path.exists(modelPath+loadModelName+'.pth'):
-            print("Loading: ", modelPath+loadModelName)
-            marvin.load(modelPath, loadModelName)
-        else:
-            rootPath = "/Fast/TrainData/RYLTY/Downloads/Organizer/"
-            data.loadBySource(rootPath)
-            marvin.addLabelDescription(data)
-        marvin.trainLoop(data,modelPath, saveModelName, epoch=7000) # 7000 Total
-        marvin.save(modelPath, saveModelName)
+    if trainFastTxt is True:
+        rootPath = "/Fast/TrainData/RYLTY/Downloads/Organizer/"
+        jsPath = "/Fast/TrainData/RYLTY/Downloads/Organizer/Statement"
+        data.loadBySource(rootPath)
+        fastTxtModel = FastText.load("./Model/marvinFastTxt.gs")
+        corpus = gemsimUtils.loadCorpusTxt(jsPath)
+        # build the vocabulary
+        fastTxtModel.build_vocab(corpus_iterable=corpus)
+        fastTxtModel.build_vocab(corpus_iterable=corpus)
+
+        # train the model
+        fastTxtModel.train(
+            corpus_iterable=corpus, epochs=5000,
+            total_examples=fastTxtModel.corpus_count, total_words=fastTxtModel.corpus_total_words,
+        )
+        fastTxtModel.save("./Model/marvinFastTxt.gs")
+        vct = fastTxtModel.wv["kitty kat"]
+        print(vct)
     if marvinMatchTest is True:
         marvin = MarvinOrganizer()
-        if os.path.exists(modelPath+signatureModelName): 
+        if os.path.exists(modelPath+signatureModelName): # load the model
             marvin.fromJson(modelPath+signatureModelName)
-        else:
+        else: # Build the dataset 
             rootPath = "/Fast/TrainData/RYLTY/Downloads/Organizer/"
             data.loadBySource(rootPath)
             marvin.fromDataset(data)
