@@ -4,17 +4,7 @@ import pandas as pd
 import numpy as np
 # Paralellize some jobs where possible... after all I got 32 CPUs I should use them...
 from joblib import Parallel, delayed
-from pathlib import Path
-# Torch imports
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import torch.optim as optim
 import re
-import torch.utils
-from torch.utils.data import Dataset, DataLoader
-import torch.utils.data
-import ryltyPdfParser
 from unidecode import unidecode
 from gensim.models.fasttext import FastText
 from tqdm import tqdm
@@ -22,10 +12,9 @@ from scipy.special import softmax
 
 import gemsimUtils
 
-ALPHABET = ['a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','q','s','t','u','v','w','x','y','z','0','1','2','3','4','5','6','7','8','9',' ']
-
 CST_MODEL_VERSION = "V1"
-CST_VCT_TYPE = "FastTxtEigV"
+CST_VCT_TYPE = "FastTxtAvg"
+
 class MarvinOrganizerUtils:
     """Utilities class for the Marvin organizer"""
     # We skip pdf for now
@@ -44,20 +33,44 @@ class MarvinOrganizerUtils:
         strN = " ".join(strN.split())
         return strN
 
+    def vctToString(self, vct:list):
+        """convert a vector to a nicely formated string with a well defined resolution
+
+        Args:
+            vct (list): list of array of float values
+        Returns:
+            str: a string representing the vector
+        """
+        depth = 3
+        vct = np.round(np.array(vct) * 10**depth) / 10** depth
+        vctStr = "["+", ".join([str(v) for v in vct])+"]"
+        return vctStr
+    
     def buildTextEmbedding(self,txt):
         if len(txt.strip()) == 0:
             return None
-        wLst = txt.split()
+        wLstClean = txt.split()
         embMtx  = []
-        for w in wLst:
-            emb = self.fastTxtModel.wv[w]
+        for i, w in enumerate(wLstClean):
+            emb = self.fastTxtModel.wv[w] 
             embMtx.append(emb)
-
         embMtx = np.array(embMtx)
+        embV = np.sum(embMtx, axis=0)
+        embV = embV/np.linalg.norm(embV)
+        return embV
+        # if len(txt.strip()) == 0:
+        #     return None
+        # wLst = txt.split()
+        # embMtx  = []
+        # for w in wLst:
+        #     emb = self.fastTxtModel.wv[w]
+        #     embMtx.append(emb)
+
+        # embMtx = np.array(embMtx)
        
-        MM = np.matmul(embMtx.T, embMtx)
-        eigVal, eigVct = np.linalg.eig(MM)
-        return np.real(eigVct[:,0])
+        # MM = np.matmul(embMtx.T, embMtx)
+        # eigVal, eigVct = np.linalg.eig(MM)
+        # return np.real(eigVct[:,0])
     
     def rebuildDFHeader(self, df:pd.DataFrame):
         """Check if the data frame contains a header before the genuine data and drops de corresponding lines
@@ -125,16 +138,16 @@ class MarvinOrganizerUtils:
         for s in sepLst:
             if df is None:
                 try:
-                    df = pd.read_csv(filename, sep=s,engine='python', encoding="utf_8")
+                    df = pd.read_csv(filename, sep=s,engine='python', encoding="utf_8", low_memory=False)
                 except:
                     try:
-                        df = pd.read_csv(filename, sep=s,engine='c', encoding="utf_8")
+                        df = pd.read_csv(filename, sep=s,engine='c', encoding="utf_8", low_memory=False)
                     except:
                         try:
-                            df = pd.read_csv(filename, sep=s,engine='python', encoding='latin_1')
+                            df = pd.read_csv(filename, sep=s,engine='python', encoding='latin_1', low_memory=False)
                         except:
                             try:
-                                df = pd.read_csv(filename, sep=s,engine='c', encoding='latin_1')
+                                df = pd.read_csv(filename, sep=s,engine='c', encoding='latin_1', low_memory=False)
                             except:
                                 df = None
         return df
@@ -147,20 +160,25 @@ class MarvinOrganizerUtils:
         # Set max font family value to 100
         if self.fixXLErr14 is None:
             self.fixXLErr14 = mock.patch('openpyxl.styles.fonts.Font.family.max', new=100)
-
         self.fixXLErr14.start()
-        # import openpyxl
-        # openpyxl.open('my-bugged-worksheet.xlsx') # this works now!
-
         df = None
         try:
-            df = pd.read_excel(filename)
+            df = pd.read_excel(filename, engine='calamine')
         except:
-            df = pd.read_excel(filename, engine='openpyxl')
+            try:
+                df = pd.read_excel(filename, engine='openpyxl')
+            except:
+                try:
+                    df = pd.read_excel(filename, engine='xlrd')
+                except:
+                    try:
+                        df =  pd.read_excel(filename, engine='pyxlsb')
+                    except:
+                        df = None
         self.fixXLErr14.stop()
         return df
 
-class MarvinOrganizerData(Dataset):
+class MarvinOrganizerData():
 
     def __init__(self):
         self.utils = MarvinOrganizerUtils()
@@ -197,7 +215,7 @@ class MarvinOrganizerData(Dataset):
                 folderData = [{ "file": v[2],
                                 "txt":v[1],
                                 "vct": [float(i) for i in v[0]],
-                                "classNum": classNum, "lbl": label} for v in embList if (len(v) > 0) and v[0] is not None]
+                                "classNum": classNum, "lbl": label} for v in embList if (len(v) > 0) and (len(v[0]) > 0)]
 
         if len(folderData) > 0:
             self.vecSize = len(folderData[0]["vct"])
@@ -249,32 +267,23 @@ class MarvinOrganizerData(Dataset):
         classIdx = 0
         sourceIdx = {}
         for d1 in os.listdir(root):
-            for d2 in os.listdir(root+d1):
-                if os.path.isdir(root+d1+"/"+d2):
-                    if d2 in list(sourceIdx.keys()):
-                        self.preloadFolder(root+d1+"/"+d2+"/", classNum=sourceIdx[d2], label=d2)
-                    else:
-                        self.preloadFolder(root+d1+"/"+d2+"/", classNum=classIdx, label=d2)
-                        sourceIdx[d2] = classIdx
-                        classIdx += 1
+            if os.path.isdir(root+d1):
+                for d2 in os.listdir(root+d1):
+                    if os.path.isdir(root+d1+"/"+d2):
+                        if d2 in list(sourceIdx.keys()):
+                            self.preloadFolder(root+d1+"/"+d2+"/", classNum=sourceIdx[d2], label=d2)
+                        else:
+                            self.preloadFolder(root+d1+"/"+d2+"/", classNum=classIdx, label=d2)
+                            sourceIdx[d2] = classIdx
+                            classIdx += 1
         self.numClasses = classIdx
 
-    def __len__(self):
-        return len(self.data)
-
-    def __getitem__(self,idx):
-        idx = idx % self.__len__()
-        vct = torch.tensor(self.data[idx]["vct"])
-
-        cls = self.data[idx]["classNum"] # Class Index
-        return vct, cls
-    
     def len(self):
         return len(self.data)
     
 
 class MarvinOrganizer():
-
+    minCossim = 1 # Only acccept perfectMatches 
     def __init__(self):
         self.utils = MarvinOrganizerUtils()
         pass
@@ -291,11 +300,11 @@ class MarvinOrganizer():
         self.vectorSources = {}
         self.vectorSourcesProba = {}
         self.vectorProba = {}
-        print("Loading Building model ...")
-        for s in tqdm(dataset.data, total=dataset.__len__()):
+        print("Building model...")
+        for s in tqdm(dataset.data, total=dataset.len()):
             v = s['vct']
             lbl = s['lbl']
-            k = str(v)
+            k = utils.vctToString(v)
             self.sourceProba[lbl] += 1
             self.sourceVectors[lbl] += [v]
             if k in self.vectorSources.keys():
@@ -325,7 +334,7 @@ class MarvinOrganizer():
         # Compute the conditionnal probablility P(Lbl|Vct)
         for srcK in self.vectorSources.keys():
             lblsCnts = [self.vectorSourcesProba[srcK][lbl] for lbl in self.vectorSourcesProba[srcK].keys()]
-            lblsCnts = np.exp(lblsCnts / np.sum(lblsCnts))
+            lblsCnts = np.exp(lblsCnts / np.sum(lblsCnts))# Data is normalized to a unit vector to keep it numericaly behaved
             lblsCnts = lblsCnts / np.sum(lblsCnts)
             for i, k in enumerate(self.vectorSourcesProba[srcK].keys()):
                 self.vectorSourcesProba[srcK][k] = lblsCnts[i]
@@ -341,28 +350,22 @@ class MarvinOrganizer():
             (list): posterior probability of each hypothesis
         """
         emb, _, _ = self.utils.buildFileEmbedding(fileName)
+        sourcesList = []
+        sourcesProba = [] 
         if len(emb) == 0 or np.isnan(np.any(emb)):
-            return (None, None)
-        embStr = str(emb)
+            return sourcesList, sourcesProba
+
+        embStr = utils.vctToString(emb)
         if embStr in self.vectorSources.keys():
             sources = self.vectorSources[embStr]
             # Compute the posterior of the match based on the computed statistics on the training data set
-            sourcesProba = [(self.vectorSourcesProba[embStr][k] * self.vectorProba[embStr]) / self.sourceProba[k] for k in sources]
-            return sources, sourcesProba, [1 for s in sources]
-        else:
-            # Get the closest match
-            bestScore = 0
-            lbl = None
-            for s in self.sourceVectors.keys():
-                for v in self.sourceVectors[s]:
-                    score = np.dot(emb/np.linalg.norm(emb),v/np.linalg.norm(v))
-                    if score>bestScore:
-                        bestScore = score
-                        lbl = s
-                        key = str(v)
-            sourcesProba = self.vectorSourcesProba[key][lbl] * self.vectorProba[key] / self.sourceProba[lbl]
-            return [lbl], [sourcesProba], [bestScore]
-
+            # We drop the source prior for now since it looks very disbalanced
+            # sourcesProba = [(self.vectorSourcesProba[embStr][k] * self.sourceProba[k] ) /self.vectorProba[embStr] for k in sources]
+            sourcesProba = [self.vectorSourcesProba[embStr][k] for k in sources]
+            sourcesProba = np.exp(sourcesProba)
+            sourcesProba = sourcesProba/np.sum(sourcesProba)
+        return sources, sourcesProba
+ 
     def toJson(self, jsonFile:str):
         """Save the current configuration to a json file
 
@@ -392,51 +395,6 @@ class MarvinOrganizer():
         self.vectorSources = model["vectorSources"]
         self.vectorSourcesProba = model["vectorSourcesProba"]
 
-
-    batchSize = 16
-    learningRate = 1e-3
-    # Loss regularization
-    regParam = 1e-3
-    # the loss function
-    criterion = nn.MSELoss()
-
-    def __init__(self, inputSize=1260, nLabels=2):
-        """Constructor
-
-        @WARNING: Input and output layer size are hard coded wrt the embedding size in the current language model (768 for BERT)
-
-        Args:
-            inputSize (int): length of the input vector (text embedding). Should be 1296. Defaults to 1296
-            nLabels (int): the number of classes to train the network upon. Defaults to 2
-        """
-        super(MarvinOrganizer, self).__init__()
-        self.network = nn.Sequential(
-            nn.Linear(inputSize, 512),
-            # nn.ReLU(),
-            # nn.Linear(512, 256),
-            # nn.ReLU(),
-            # nn.Linear(256,128),
-            # nn.ReLU(),
-            # nn.Linear(128, 64),
-            # nn.ReLU(),
-            # nn.Linear(64, 32),
-            # nn.ReLU(),
-            nn.Linear(512, nLabels)
-        )
-        self.softMax = nn.Softmax(dim=1)
-        self.childrenList = list(self.children())
-        # Send model to GPU
-        if torch.cuda.is_available():
-            self.device = 'cuda:0'
-        else:
-            self.device = 'cpu'
-        self.toDevice()
-        # Initialize the loss function and optimizer 
-        self.lossFct = nn.CrossEntropyLoss()
-        self.optimizer = torch.optim.SGD(self.parameters(), lr=self.learningRate)
-        self.label2id = {}
-        self.id2label = {}
-
     def addLabelDescription(self, dataset:MarvinOrganizerData):
         """Add label/id information to the model from the training dataset
 
@@ -446,149 +404,15 @@ class MarvinOrganizer():
         self.label2id = dataset.label2id
         self.id2label = dataset.id2label
 
-    def toDevice(self):
-        """Send the model to GPU if available"""
-        self.to(self.device)
-        self.to(torch.float32)
-
-    def forward(self, x):
-        x = x.to(torch.float32)
-        x = x.to(self.device)
-        x = self.network(x)
-        return x
-
-    def predict(self, x):
-        x = x.to(torch.float32)
-        x = x.to(self.device)
-        logits = self.network(x)
-        predProbab = self.softMax(logits)
-        classNumber = predProbab.argmax(1)
-        score = predProbab[classNumber]
-        classLabel = self.id2label[str(classNumber)]
-        return classNumber, classLabel, score
-
-
-    def fit(self, dataloader):
-        """Train the model for one epoch
-
-        Args:
-            dataset (Dataset): torch.dataset instance, in principle built from a ryltySongData
-            epoch (int): number of epoch to run training
-
-        Returns:
-            _type_: _description_
-        """
-        print('Training')
-        
-        size = len(dataloader.dataset)
-        self.train()
-        running_loss = 0.0
-        counter = 0
-        for i, (data, lbl) in tqdm(enumerate(dataloader), total=int(size/dataloader.batch_size)):
-            counter += 1
-            embedding = data
-            embedding = embedding.to(self.device).to(torch.float32)
-            lbl = lbl.to(self.device).to(torch.long)
-            self.optimizer.zero_grad()
-            outputs = self(embedding)
-            loss = self.lossFct(outputs, lbl)
-            loss.backward()
-            self.optimizer.step()
-            self.optimizer.zero_grad()
-            # if i % 100 == 0:
-            #     loss, current = loss.item(), i * self.batchSize + len(embedding)
-            #     print(f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
-        epoch_loss = running_loss / counter
-        print(f"Train Loss: {loss:.3f}")
-        return epoch_loss
-
-    def test(self, dataloader):
-        """Test the model on the provided data for one epoch
-
-        Args:
-            dataset (Dataset): torch.dataset instance, in principle built from a ryltySongData
-        Returns:
-            _type_: _description_
-        """
-        print('Test')
-        size = len(dataloader.dataset)
-        self.eval()
-        runningLoss, correct = 0, 0
-        with torch.no_grad():
-            for i, (data, lbl) in tqdm(enumerate(dataloader), total=int(size/dataloader.batch_size)):
-                embedding = data.to(self.device).to(torch.float32)
-                lbl = lbl.to(self.device).to(torch.long)
-                self.optimizer.zero_grad()
-                outputs = self(embedding)
-                loss = self.lossFct(outputs, lbl)
-                runningLoss += loss.item()
-                correct += (outputs.argmax(1) == lbl).type(torch.float).sum().item()
-        epochLoss = runningLoss / len(dataloader)
-        epochCorrect = correct / size
-        print(f"Test Error: \n Accuracy: {(100*epochCorrect):>0.1f}%, Avg loss: {epochLoss:>8f} \n")
-        return epochLoss
-    
-    def trainLoop(self, dataset, modelPath, modelName, epoch=10):
-        """Train the model using the provided dataset 
-
-        Args:
-            dataset (MarvinOrganizerData): train/test data
-            modelPath (str): path to the folder where to autosave the model
-            modelName (str): base name for the model
-            epoch (int): number of epoch to run the training. Defaults to 10
-        """
-        # self.addLabelDescription(dataset)
-        trainData, testData = torch.utils.data.random_split(dataset, [0.8, 0.2])
-        trainDataLoader = DataLoader(trainData, batch_size=self.batchSize, shuffle=True)
-        testDataLoader = DataLoader(testData, batch_size=self.batchSize, shuffle=True)
-        bestLoss = 10000
-        for e in range(epoch):
-            print(f"Epoch {e+1}\n-------------------------------")
-            self.fit(trainDataLoader)
-            epochLoss = self.test(testDataLoader)
-            if epochLoss < bestLoss:
-                self.save(modelPath, modelName)
-                bestLoss = epochLoss
-        print("Done !")
-
-    def save(self, path, modelName):
-        """Save the model and the label to id information in a common place
-
-        Args:
-            path (str): path to the folder to save the model
-            modelName (str): name of the model (basename -without extension- for the different files that will be created)
-            
-        """
-        torch.save(self.state_dict(), modelPath+modelName+'.pth')
-        with open(modelPath+modelName+'.json','w') as f:
-            json.dump([self.label2id, self.id2label], f)
-
-    def load(self, path, modelName):
-        """load the model and the label to id information in a common place
-
-        Args:
-            path (str): path to the folder to save the model
-            modelName (str): name of the model (basename -without extension- for the different files to load)
-            
-        """
-        self.load_state_dict(torch.load(modelPath+modelName+'.pth', weights_only=True))
-        # Note: we do not do any data type conversion since any error there means we do not load the correct model (see constructor)
-        self.toDevice()
-
-        with open(modelPath+modelName+'.json','r') as f:
-            lblid  = json.load(f)
-            self.label2id = lblid[0]
-            self.id2label = lblid[1]
-
 if __name__ == "__main__":
     # Select task
-    marvinMatchTest = False
-    trainFastTxt = True
-    version = 'v1'
+    marvinMatchTest = True
+    trainFastTxt = False
+    version = 'v1.1'
     modelPath = "./Model/"
     saveModelName = 'marvinOrganizer_'+"_FastTxt"+version
     loadModelName = 'marvinOrganizer_'+"_FastTxt"+version
-    signatureModelName = 'marvinSigns_'+CST_VCT_TYPE+version+".json"
+    signatureModelName = 'marvinOrganizerSignatures_'+CST_VCT_TYPE+version+".json"
     utils = MarvinOrganizerUtils()
     data = MarvinOrganizerData()
     if trainFastTxt is True:
@@ -619,22 +443,19 @@ if __name__ == "__main__":
             marvin.fromDataset(data)
             marvin.toJson(modelPath+signatureModelName)
 
-        rootPath = "./Data/Christopher Liggio/"
+        # rootPath = "./Data/Christopher Liggio/"
+        rootPath = "/Fast/TrainData/RYLTY/Downloads/Organizer/Statement/"
         print("+=====================================+")
         print(" BMI Publisher: ")
-        for f in os.listdir(rootPath+"BMI_Publisher/"):
-            src, sourceScore, matchScore = marvin.getSources(rootPath+"BMI_Publisher/"+f)
-            print(f)
-            for i,s in enumerate(src):
-                print(s," :",sourceScore[i],", ", matchScore[i])
+        for f in os.listdir(rootPath+"BMI Publisher/"):
+            source, sourceScore = marvin.getSources(rootPath+"BMI Publisher/"+f)
+            print(f, "->", source,": ", sourceScore)
+            
         print("+=====================================+")
         print(" BMI Writer: ")
 
-        for f in os.listdir(rootPath+"BMI_Writer/"):
-            src, sourceScore, matchScore = marvin.getSources(rootPath+"BMI_Writer/"+f)
-            print(f)
-            for i,s in enumerate(src):
-                print(s," :",sourceScore[i],", ", matchScore[i])
-        
+        for f in os.listdir(rootPath+"BMI Writer/"):
+            source, sourceScore = marvin.getSources(rootPath+"BMI Writer/"+f)
+            print(f, "->", source,": ", sourceScore)
         
 
