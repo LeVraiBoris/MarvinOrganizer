@@ -446,16 +446,16 @@ if __name__ == "__main__":
         # rootPath = "./Data/Christopher Liggio/"
         rootPath = "/Fast/TrainData/RYLTY/Downloads/Organizer/Statement/"
         print("+=====================================+")
-        print(" BMI Publisher: ")
-        for f in os.listdir(rootPath+"BMI Publisher/"):
-            source, sourceScore = marvin.getSources(rootPath+"BMI Publisher/"+f)
-            print(f, "->", source,": ", sourceScore)
-            
-        print("+=====================================+")
         print(" BMI Writer: ")
-
         for f in os.listdir(rootPath+"BMI Writer/"):
             source, sourceScore = marvin.getSources(rootPath+"BMI Writer/"+f)
             print(f, "->", source,": ", sourceScore)
+            
+        print("+=====================================+")
+        print(" Gusto Records: ")
+        for f in os.listdir(rootPath+"Gusto Records/"):
+            source, sourceScore = marvin.getSources(rootPath+"Gusto Records/"+f)
+            print(f, "->", source,": ", sourceScore)
+     
         
 
