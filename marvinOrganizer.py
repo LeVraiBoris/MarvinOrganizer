@@ -14,6 +14,8 @@ import gemsimUtils
 
 CST_MODEL_VERSION = "V1"
 CST_VCT_TYPE = "FastTxtAvg"
+#@TODO Remove files built with terylty template:
+# statementDate,title,workId,incomeSource,sourceGrossIncome,royaltyAmount,incomeType,distributionType,featuredArtist,country,perfCount
 
 class MarvinOrganizerUtils:
     """Utilities class for the Marvin organizer"""
@@ -138,16 +140,16 @@ class MarvinOrganizerUtils:
         for s in sepLst:
             if df is None:
                 try:
-                    df = pd.read_csv(filename, sep=s,engine='python', encoding="utf_8", low_memory=False)
+                    df = pd.read_csv(filename, sep=s,engine='python', encoding="utf_8", nrows=10, low_memory=False)
                 except:
                     try:
-                        df = pd.read_csv(filename, sep=s,engine='c', encoding="utf_8", low_memory=False)
+                        df = pd.read_csv(filename, sep=s,engine='c', encoding="utf_8", nrows=10, low_memory=False)
                     except:
                         try:
-                            df = pd.read_csv(filename, sep=s,engine='python', encoding='latin_1', low_memory=False)
+                            df = pd.read_csv(filename, sep=s,engine='python', encoding='latin_1', nrows=10, low_memory=False)
                         except:
                             try:
-                                df = pd.read_csv(filename, sep=s,engine='c', encoding='latin_1', low_memory=False)
+                                df = pd.read_csv(filename, sep=s,engine='c', encoding='latin_1', nrows=10, low_memory=False)
                             except:
                                 df = None
         return df
@@ -163,16 +165,16 @@ class MarvinOrganizerUtils:
         self.fixXLErr14.start()
         df = None
         try:
-            df = pd.read_excel(filename, engine='calamine')
+            df = pd.read_excel(filename, nrows=10, engine='calamine')
         except:
             try:
-                df = pd.read_excel(filename, engine='openpyxl')
+                df = pd.read_excel(filename, nrows=10, engine='openpyxl')
             except:
                 try:
-                    df = pd.read_excel(filename, engine='xlrd')
+                    df = pd.read_excel(filename, nrows=10, engine='xlrd')
                 except:
                     try:
-                        df =  pd.read_excel(filename, engine='pyxlsb')
+                        df =  pd.read_excel(filename, nrows=10, engine='pyxlsb')
                     except:
                         df = None
         self.fixXLErr14.stop()
@@ -288,57 +290,93 @@ class MarvinOrganizer():
         self.utils = MarvinOrganizerUtils()
         pass
 
-    def loadModel(self, modelFile:str):
-        with open(modelFile, 'r') as f:
-            self.formatModels = json.load(f)
+    def learnFileFormat(self, file:str, label:str):
+        """Add a file to the already known formats.
+
+            If the format is known, the corresponding priors are updated
+
+        Args:
+            file (str): string or path to the file
+            label (str): label of the file (statment source)
+        """
+        emb = self.utils.buildFileEmbedding(file)
+        embStr = utils.vctToString(emb)
+        self.sourceCount[label] += 1
+        self.sourceVectors[label] += [emb]
+        if embStr in self.vectorSources.keys():
+            if label not in self.vectorSources[embStr]:
+                self.vectorSources[embStr] += [label]
+                self.vectorSourcesCount[embStr][label] = 1
+            else: 
+                self.vectorSourcesCount[embStr][label] += 1
+            self.vectorCount[embStr] += 1
+        else:
+            self.vectorSources[embStr] = [label]
+            self.vectorSourcesCount[embStr] = {label:1}
+            self.vectorCount[embStr] = 1
+        self.__countsToProba__()
 
     def fromDataset(self, dataset:MarvinOrganizerData):
         self.id2label= dataset.id2label
         self.label2id = dataset.label2id
         self.sourceVectors = {k:[] for k in self.label2id.keys()}
+        self.sourceCount = {k:0 for k in self.label2id.keys()}
         self.sourceProba = {k:0 for k in self.label2id.keys()}
         self.vectorSources = {}
+        self.vectorSourcesCount = {}
         self.vectorSourcesProba = {}
+        self.vectorCount = {}
         self.vectorProba = {}
         print("Building model...")
         for s in tqdm(dataset.data, total=dataset.len()):
             v = s['vct']
             lbl = s['lbl']
             k = utils.vctToString(v)
-            self.sourceProba[lbl] += 1
+            self.sourceCount[lbl] += 1
             self.sourceVectors[lbl] += [v]
             if k in self.vectorSources.keys():
                 if lbl not in self.vectorSources[k]:
                     self.vectorSources[k] += [lbl]
-                    self.vectorSourcesProba[k][lbl] = 1
+                    self.vectorSourcesCount[k][lbl] = 1
                 else: 
-                    self.vectorSourcesProba[k][lbl] += 1
-                self.vectorProba[k] += 1
+                    self.vectorSourcesCount[k][lbl] += 1
+                self.vectorCount[k] += 1
             else:
                 self.vectorSources[k] = [lbl]
-                self.vectorSourcesProba[k] = {lbl:1}
-                self.vectorProba[k] = 1
- 
+                self.vectorSourcesCount[k] = {lbl:1}
+                self.vectorCount[k] = 1
+        self.__countsToProba__()
+
+    def __countsToProba__(self):
+        """Utility function, convert vector and source counts to probability distribution.
+
+            Uses Softmax for that.
+            Also updates self.lbl2id and self.id2lbl to match class names (rylty sources) and the label number
+        """
         # Compute the prior probability of each class based on the frequency in the test dataset
-        srcProba = [self.sourceProba[k] for k in self.sourceProba.keys()]
+        srcProba = [self.sourceCount[k] for k in self.sourceCount.keys()]
         srcProba = np.exp(srcProba/np.sum(srcProba)) # Data is normalized to a unit vector to keep it numericaly behaved
         srcProba = srcProba/np.sum(srcProba)
-        for i, k in enumerate(self.sourceProba.keys()):
+        for i, k in enumerate(self.sourceCount.keys()):
             self.sourceProba[k] = srcProba[i]
         # Compute the prior probability of each class
-        vctCnt = [self.vectorProba[k] for k in self.vectorProba.keys()]
-        vctCnt = np.exp(vctCnt / np.sum(vctCnt))# Data is normalized to a unit vector to keep it numericaly behaved
-        vctCnt = vctCnt / np.sum(vctCnt)
-        for (i,k) in enumerate(self.vectorProba.keys()):
-            self.vectorProba[k] = vctCnt[i]
+        vctProba = [self.vectorCount[k] for k in self.vectorCount.keys()]
+        vctProba = np.exp(vctProba / np.sum(vctProba))# Data is normalized to a unit vector to keep it numericaly behaved
+        vctProba = vctProba / np.sum(vctProba)
+        for (i,k) in enumerate(self.vectorCount.keys()):
+            self.vectorProba[k] = vctProba[i]
         # Compute the conditionnal probablility P(Lbl|Vct)
         for srcK in self.vectorSources.keys():
-            lblsCnts = [self.vectorSourcesProba[srcK][lbl] for lbl in self.vectorSourcesProba[srcK].keys()]
+            lblsCnts = [self.vectorSourcesCount[srcK][lbl] for lbl in self.vectorSourcesCount[srcK].keys()]
             lblsCnts = np.exp(lblsCnts / np.sum(lblsCnts))# Data is normalized to a unit vector to keep it numericaly behaved
             lblsCnts = lblsCnts / np.sum(lblsCnts)
-            for i, k in enumerate(self.vectorSourcesProba[srcK].keys()):
+            self.vectorSourcesProba[srcK] = {}
+            for i, k in enumerate(self.vectorSourcesCount[srcK].keys()):
                 self.vectorSourcesProba[srcK][k] = lblsCnts[i]
-    
+        for i,k in enumerate(self.sourceProba.keys()):
+            self.label2id[k] = i
+            self.id2label[i] = k
+
     def getSources(self, fileName:str):
         """Retrieve the royalty sources based on the format signature. 
 
@@ -373,10 +411,13 @@ class MarvinOrganizer():
             jsonFile (str): path to the json file
         """
         model = {"sourceVectors": self.sourceVectors,
-                 "sourceProbas": self.sourceProba,
-                 "vectorProba": self.vectorProba,
+                 "sourceCount": self.sourceCount,
+                 "vectorCount": self.vectorCount,
                  "vectorSources": self.vectorSources,
-                 "vectorSourcesProba": self.vectorSourcesProba} 
+                 "vectorSourcesCount": self.vectorSourcesCount,
+                #  "label2id": self.label2id,
+                #  "id2label": self.id2label
+                 } 
         with open(jsonFile,'w') as f:
             json.dump(model, f)
           
@@ -390,10 +431,13 @@ class MarvinOrganizer():
         with open(jsonFile,'r') as f:
             model = json.load(f)
         self.sourceVectors= model["sourceVectors"]
-        self.sourceProba = model["sourceProbas"]
-        self.vectorProba = model["vectorProba"]
+        self.sourceCount = model["sourceCounts"]
+        self.vectorCount = model["vectorCount"]
         self.vectorSources = model["vectorSources"]
-        self.vectorSourcesProba = model["vectorSourcesProba"]
+        self.vectorSourcesCount = model["vectorSourcesCount"]
+        # self.label2id = model["label2id"]
+        # self.id2label = model["id2label"]
+        self.__countsToProba__()
 
     def addLabelDescription(self, dataset:MarvinOrganizerData):
         """Add label/id information to the model from the training dataset
@@ -408,7 +452,7 @@ if __name__ == "__main__":
     # Select task
     marvinMatchTest = True
     trainFastTxt = False
-    version = 'v1.1'
+    version = 'v2.0'
     modelPath = "./Model/"
     saveModelName = 'marvinOrganizer_'+"_FastTxt"+version
     loadModelName = 'marvinOrganizer_'+"_FastTxt"+version
@@ -416,16 +460,19 @@ if __name__ == "__main__":
     utils = MarvinOrganizerUtils()
     data = MarvinOrganizerData()
     if trainFastTxt is True:
-        rootPath = "/Fast/TrainData/RYLTY/Downloads/Organizer/"
-        jsPath = "/Fast/TrainData/RYLTY/Downloads/Organizer/Statement"
+        rootPath = "/Fast/TrainData/RYLTY/Organizer/"
+        jsPath = "/Fast/TrainData/RYLTY/Organizer/Statement"
+        print("Loading data")
         data.loadBySource(rootPath)
         fastTxtModel = FastText.load("./Model/marvinFastTxt.gs")
         corpus = gemsimUtils.loadCorpusTxt(jsPath)
-        # build the vocabulary
+        # build the vocabular
+        print("Building Fasttext corpus")
         fastTxtModel.build_vocab(corpus_iterable=corpus)
         fastTxtModel.build_vocab(corpus_iterable=corpus)
 
         # train the model
+        print("Training...")
         fastTxtModel.train(
             corpus_iterable=corpus, epochs=5000,
             total_examples=fastTxtModel.corpus_count, total_words=fastTxtModel.corpus_total_words,
@@ -453,6 +500,7 @@ if __name__ == "__main__":
             
         print("+=====================================+")
         print(" Gusto Records: ")
+
         for f in os.listdir(rootPath+"Gusto Records/"):
             source, sourceScore = marvin.getSources(rootPath+"Gusto Records/"+f)
             print(f, "->", source,": ", sourceScore)
