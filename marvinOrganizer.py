@@ -44,7 +44,7 @@ class MarvinOrganizerUtils:
             str: a string representing the vector
         """
         depth = 3
-        vct = np.round(np.array(vct) * 10**depth) / 10** depth
+        vct = np.round(np.array(vct) * 10**depth) / 10**depth
         vctStr = "["+", ".join([str(v) for v in vct])+"]"
         return vctStr
     
@@ -56,10 +56,10 @@ class MarvinOrganizerUtils:
         Returns:
             int: hash code representing the vector
         """
-        depth = 3
-        vct = np.round(np.array(vct) * 10**depth) / 10** depth
-        vctStr = ", ".join([str(v) for v in vct])
-        hashKey = hash(vctStr)
+        depth = 10**5
+        vctA = np.array(vct)
+        # Reduce the floating point precision so that we can deal with the precisiojn loss when loading/saving the data.
+        hashKey = hash(tuple(np.round(vctA*depth)/depth)) 
         return hashKey
     
     def buildTextEmbedding(self,txt):
@@ -323,7 +323,7 @@ class MarvinOrganizer():
         self.utils = MarvinOrganizerUtils()
         pass
 
-    def learnFileFormat(self, file:str, label:str):
+    def updateFromFile(self, file:str, label:str):
         """Add a single file to the model.
 
             If the format is not know, a new category is created 
@@ -334,10 +334,14 @@ class MarvinOrganizer():
             file (str): string or path to the file
             label (str): label of the file (statement source)
         """
-        emb, col2id, id2col, filename = self.utils.buildFileEmbedding(file)
-        embStr = utils.vctToHash(emb)
-        self.sourceCount[label] += 1
-        self.sourceVectors[label] += [emb]
+        emb, col2id, id2col, _ = self.utils.buildFileEmbedding(file)
+        embStr = str(utils.vctToHash(emb))
+        if label in self.sourceCount.keys():
+            self.sourceCount[label] += 1
+            self.sourceVectors[label] += [emb]
+        else:
+            self.sourceCount[label] = 1
+            self.sourceVectors[label] = [emb]
         if embStr in self.vectorSources.keys():
             if label not in self.vectorSources[embStr]:
                 self.vectorSources[embStr] += [label]
@@ -421,7 +425,6 @@ class MarvinOrganizer():
 
         Args:
             fileName (str): path to the file to process
-
         Returns:
             (list): list of labels (royalty sources)
             (list): posterior probability of each hypothesis
@@ -537,19 +540,15 @@ if __name__ == "__main__":
             marvin.toJson(modelPath+signatureModelName)
 
         # rootPath = "./Data/Christopher Liggio/"
-        rootPath = "/Fast/TrainData/RYLTY/Downloads/Organizer/Statement/"
+        rootPath = "/Fast/TrainData/RYLTY/Organizer/Statement/"
+        # rootPath = "/Fast/TrainData/RYLTY/Organizer/Statement/"
         print("+=====================================+")
-        print(" BMI Writer: ")
+        print(" Believe Digital: ")
         for f in os.listdir(rootPath+"Believe Digital/"):
             source, sourceScore = marvin.getSources(rootPath+"Believe Digital/"+f)
             print(f, "->", source,": ", sourceScore)
-            
-        print("+=====================================+")
-        print(" Gusto Records: ")
-
-        for f in os.listdir(rootPath+"Gusto Records/"):
-            source, sourceScore = marvin.getSources(rootPath+"Gusto Records/"+f)
-            print(f, "->", source,": ", sourceScore)
-     
-        
-
+            if len(source) == 0:
+                marvin.updateFromFile(rootPath+"Believe Digital/"+f, label= "Goofy Records!!")
+                print(" Added label: Goofy Records!!")
+                source, sourceScore = marvin.getSources(rootPath+"Believe Digital/"+f)
+                print(f, "->", source,": ", sourceScore)
