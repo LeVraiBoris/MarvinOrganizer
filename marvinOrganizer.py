@@ -539,13 +539,14 @@ if __name__ == "__main__":
             marvin.fromDataset(data)
             marvin.toJson(modelPath+signatureModelName)
 
-        # rootPath = "./Data/Christopher Liggio/"
         rootPath = "/Fast/TrainData/RYLTY/Organizer/Statement/"
-        # rootPath = "/Fast/TrainData/RYLTY/Organizer/Statement/"
         print("+=====================================+")
         print(" Believe Digital: ")
         for f in os.listdir(rootPath+"Believe Digital/"):
             source, sourceScore = marvin.getSources(rootPath+"Believe Digital/"+f)
+            # Note updating for a know source would only update the priors, 
+            # is it really worth it while we work with exact matches only ? 
+            # marvin.updateFromFile(rootPath+"Believe Digital/"+f, label= "Believe Digital")
             print(f, "->", source,": ", sourceScore)
             if len(source) == 0:
                 marvin.updateFromFile(rootPath+"Believe Digital/"+f, label= "Goofy Records!!")
