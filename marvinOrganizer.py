@@ -12,7 +12,7 @@ from scipy.special import softmax
 
 import gemsimUtils
 
-CST_MODEL_VERSION = "V4"
+CST_MODEL_VERSION = "v5"
 CST_VCT_TYPE = "FastTxtHash"
 #@TODO Remove files built with terylty template:
 # statementDate,title,workId,incomeSource,sourceGrossIncome,royaltyAmount,incomeType,distributionType,featuredArtist,country,perfCount
@@ -58,7 +58,7 @@ class MarvinOrganizerUtils:
         """
         depth = 10**5
         vctA = np.array(vct)
-        # Reduce the floating point precision so that we can deal with the precisiojn loss when loading/saving the data.
+        # Reduce the floating point precision so that we can deal with the precision loss when loading/saving the data.
         hashKey = hash(tuple(np.round(vctA*depth)/depth)) 
         return hashKey
     
@@ -150,13 +150,17 @@ class MarvinOrganizerUtils:
             print(inst)
             return emb
         if df is not None:
-            cols = list(df.columns)
-            cols = [str(c) for c in cols]
-            txt = " ".join(cols)
-            col2idx = {c:i for i,c in enumerate(cols)}
-            idx2col = {i:c for i,c in enumerate(cols)}
-            emb = self.buildTextEmbedding(txt)
+            emb, col2idx, idx2col = self.buildDataFrameEmbedding(df)
         return emb, col2idx, idx2col, filename
+    
+    def buildDataFrameEmbedding(self, df):
+        cols = list(df.columns)
+        cols = [str(c) for c in cols]
+        txt = " ".join(cols)
+        col2idx = {c:i for i,c in enumerate(cols)}
+        idx2col = {i:c for i,c in enumerate(cols)}
+        emb = self.buildTextEmbedding(txt)
+        return emb, col2idx, idx2col
     
     def readPdf(self, filename):
         self.pdfParser.loadPdf(filename)
@@ -164,7 +168,6 @@ class MarvinOrganizerUtils:
         return txt
     
     def readCSV(self, filename):
-
         sepLst=[',',';','\t']
         df = None
         for s in sepLst:
@@ -211,6 +214,7 @@ class MarvinOrganizerUtils:
                         df = None
         self.fixXLErr14.stop()
         return df
+
 
 class MarvinOrganizerData():
 
@@ -313,7 +317,7 @@ class MarvinOrganizerData():
 
     def len(self):
         return len(self.data)
-    
+
 
 class MarvinOrganizer():
     minCossim = 1 # Only acccept perfectMatches 
@@ -323,7 +327,7 @@ class MarvinOrganizer():
         self.utils = MarvinOrganizerUtils()
         pass
 
-    def updateFromFile(self, file:str, label:str):
+    def updateFromFile(self, file:str, label:str, ruleKey:int=None, wizardKey:int=None):
         """Add a single file to the model.
 
             If the format is not know, a new category is created 
@@ -333,6 +337,8 @@ class MarvinOrganizer():
         Args:
             file (str): string or path to the file
             label (str): label of the file (statement source)
+            ruleKey (int): key to identify the backend rule used to read the file. Optionnal defaults to None
+            wizardKey (int): key to identify the import wizard template used to read the file. Optionnal defaults to None
         """
         emb, col2id, id2col, _ = self.utils.buildFileEmbedding(file)
         embStr = str(utils.vctToHash(emb))
@@ -355,6 +361,10 @@ class MarvinOrganizer():
             self.vectorCount[embStr] = 1
             self.col2idx[embStr] = col2id
             self.idx2col[embStr] = id2col
+        if ruleKey is not None:
+            self.vector2Rules[embStr] = ruleKey
+        if wizardKey is not None:
+            self.vector2Wizard[embStr] = wizardKey
         self.__countsToProba__()
 
     def fromDataset(self, dataset:MarvinOrganizerData):
@@ -371,6 +381,8 @@ class MarvinOrganizer():
         self.vectorCount = {}
         self.vectorProba = {}
         self.col2idx = {}
+        self.vector2Wizard = {}
+        self.vector2Rules = {}
         print("Building model...")
         for s in tqdm(dataset.data, total=dataset.len()):
             v = s['vct']
@@ -380,6 +392,8 @@ class MarvinOrganizer():
             self.idx2col[embHash]= s['idx2col']
             self.sourceCount[lbl] += 1
             self.sourceVectors[lbl] += [v]
+            self.vector2Wizard[embHash] = None
+            self.vector2Rules[embHash] = None
             if embHash in self.vectorSources.keys():
                 if lbl not in self.vectorSources[embHash]:
                     self.vectorSources[embHash] += [lbl]
@@ -457,8 +471,10 @@ class MarvinOrganizer():
                 "vectorCount": self.vectorCount,
                 "vectorSources": self.vectorSources,
                 "vectorSourcesCount": self.vectorSourcesCount,
-                "col2idx":self.col2idx,
-                "idx2col":self.idx2col
+                "col2idx": self.col2idx,
+                "idx2col": self.idx2col,
+                "vec2wiz": self.vector2Wizard,
+                "vec2rule": self.vector2Rules,
                 #  "label2id": self.label2id,
                 #  "id2label": self.id2label
                 } 
@@ -481,7 +497,8 @@ class MarvinOrganizer():
         self.vectorSourcesCount = model["vectorSourcesCount"]
         self.col2idx = model['col2idx']
         self.idx2col = model['idx2col']
-        
+        self.vector2Wizard = model['vec2wiz']
+        self.vector2Rules = model['vec2rule']
         # These will be set by self.__countsToProba__()
 
         self.label2id = {} #model["label2id"]
@@ -501,7 +518,7 @@ if __name__ == "__main__":
     # Select task
     marvinMatchTest = True
     trainFastTxt = False
-    version = 'v4.0'
+    version = CST_MODEL_VERSION
     modelPath = "./Model/"
     saveModelName = 'marvinOrganizer_'+"_FastTxt"+version
     loadModelName = 'marvinOrganizer_'+"_FastTxt"+version
