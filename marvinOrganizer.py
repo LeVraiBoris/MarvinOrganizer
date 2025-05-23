@@ -449,7 +449,7 @@ class MarvinOrganizer():
         if len(emb) == 0 or np.isnan(np.any(emb)):
             return sourcesList, sourcesProba
 
-        embStr = str(utils.vctToHash(emb))
+        embStr = str(self.utils.vctToHash(emb))
         if embStr in self.vectorSources.keys():
             sourcesList = self.vectorSources[embStr]
             # Compute the posterior of the match based on the computed statistics on the training data set
