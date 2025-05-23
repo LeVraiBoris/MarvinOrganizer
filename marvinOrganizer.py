@@ -154,7 +154,20 @@ class MarvinOrganizerUtils:
         return emb, col2idx, idx2col, filename
     
     def buildDataFrameEmbedding(self, df):
+        def isDegenerated(c):
+            tst = False
+            if isinstance(c, str):
+                tst = "Unnamed" in c
+            else:
+                tst = np.isnan(c)
+            return tst
+        
         cols = list(df.columns)
+        rowOffset = 0
+        # Skip some header rows if they are all Unamed or NaN
+        while all(isDegenerated(c) for c in cols):
+            cols = df.iloc[rowOffset]
+            rowOffset += 1
         cols = [str(c) for c in cols]
         txt = " ".join(cols)
         col2idx = {c:i for i,c in enumerate(cols)}
@@ -162,10 +175,10 @@ class MarvinOrganizerUtils:
         emb = self.buildTextEmbedding(txt)
         return emb, col2idx, idx2col
     
-    def readPdf(self, filename):
-        self.pdfParser.loadPdf(filename)
-        txt = ''.join(self.pdfParser.pageText)
-        return txt
+    # def readPdf(self, filename):
+    #     self.pdfParser.loadPdf(filename)
+    #     txt = ''.join(self.pdfParser.pageText)
+    #     return txt
     
     def readCSV(self, filename):
         sepLst=[',',';','\t']
@@ -325,7 +338,7 @@ class MarvinOrganizer():
         """Basic constructor, nothing to see here.
         """
         self.utils = MarvinOrganizerUtils()
-        pass
+
 
     def updateFromFile(self, file:str, label:str, ruleKey:int=None, wizardKey:int=None):
         """Add a single file to the model.
@@ -341,29 +354,30 @@ class MarvinOrganizer():
             wizardKey (int): key to identify the import wizard template used to read the file. Optionnal defaults to None
         """
         emb, col2id, id2col, _ = self.utils.buildFileEmbedding(file)
-        embStr = str(utils.vctToHash(emb))
-        if label in self.sourceCount.keys():
+        if len(emb) == 0 :
+            # If the file cannot be read just ignore it 
+            return
+        embStr = str(self.utils.vctToHash(emb))
+        if label in self.sourceCount.keys(): # If I know the source, update the count 
             self.sourceCount[label] += 1
-            self.sourceVectors[label] += [emb]
-        else:
+        else: # else create a new source
             self.sourceCount[label] = 1
-            self.sourceVectors[label] = [emb]
-        if embStr in self.vectorSources.keys():
-            if label not in self.vectorSources[embStr]:
+            self.sourceVectors[label] = [emb.tolist()]
+        if embStr in self.vectorSources.keys(): # If I know the format 
+            if label not in self.vectorSources[embStr]: # But not the source, create the source
                 self.vectorSources[embStr] += [label]
                 self.vectorSourcesCount[embStr][label] = 1
-            else: 
+            else: # Update the source counts
                 self.vectorSourcesCount[embStr][label] += 1
             self.vectorCount[embStr] += 1
-        else:
+        else: # I don't know the format 
             self.vectorSources[embStr] = [label]
             self.vectorSourcesCount[embStr] = {label:1}
             self.vectorCount[embStr] = 1
             self.col2idx[embStr] = col2id
             self.idx2col[embStr] = id2col
-        if ruleKey is not None:
+             #@TODO Update those once the information becomes available
             self.vector2Rules[embStr] = ruleKey
-        if wizardKey is not None:
             self.vector2Wizard[embStr] = wizardKey
         self.__countsToProba__()
 
@@ -387,11 +401,12 @@ class MarvinOrganizer():
         for s in tqdm(dataset.data, total=dataset.len()):
             v = s['vct']
             lbl = s['lbl']
-            embHash = str(utils.vctToHash(v))
+            embHash = str(self.utils.vctToHash(v))
             self.col2idx[embHash] = s['col2idx']
             self.idx2col[embHash]= s['idx2col']
             self.sourceCount[lbl] += 1
             self.sourceVectors[lbl] += [v]
+            #@TODO Update those once the information becomes available
             self.vector2Wizard[embHash] = None
             self.vector2Rules[embHash] = None
             if embHash in self.vectorSources.keys():
@@ -460,11 +475,11 @@ class MarvinOrganizer():
             sourcesProba = sourcesProba/np.sum(sourcesProba)
         return sourcesList, sourcesProba
  
-    def toJson(self, jsonFile:str):
+    def toJson(self, jsonFile:str=None):
         """Save the current configuration to a json file
 
         Args:
-            jsonFile (str): path to the json file
+            jsonFile (str): path to the json file. reuse the current model is None
         """
         model = {"sourceVectors": self.sourceVectors,
                 "sourceCount": self.sourceCount,
@@ -478,9 +493,11 @@ class MarvinOrganizer():
                 #  "label2id": self.label2id,
                 #  "id2label": self.id2label
                 } 
+        if jsonFile is None:
+            jsonFile = self.jsonFile
+
         with open(jsonFile,'w') as f:
             json.dump(model, f)
-          
 
     def fromJson(self, jsonFile:str):
         """Save the current configuration to a json file
@@ -504,6 +521,7 @@ class MarvinOrganizer():
         self.label2id = {} #model["label2id"]
         self.id2label = {} #model["id2label"]
         self.__countsToProba__()
+        self.jsonFile = jsonFile
 
     def addLabelDescription(self, dataset:MarvinOrganizerData):
         """Add label/id information to the model from the training dataset
@@ -513,6 +531,7 @@ class MarvinOrganizer():
         """
         self.label2id = dataset.label2id
         self.id2label = dataset.id2label
+
 
 if __name__ == "__main__":
     # Select task
