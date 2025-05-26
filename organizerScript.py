@@ -6,14 +6,15 @@ import sys
 import numpy as np
 import shutil
 import pandas as pd
-
+#from cli2gui import Cli2Gui
+from gooey import Gooey, GooeyParser
 DDEBUG = False
 CST_MIN_CONFIDENCE = 0.0
 
-def sortFolder(inRooPath:str, outRootPath:str, marvin:marv.MarvinOrganizer):
+def sortFolder(inRootPath:str, outRootPath:str, marvin:marv.MarvinOrganizer):
     reportFile = os.path.join(outRootPath ,"marvinOrganizerReport.csv")
     reportDct = {"OriginalPath":[], "Filename":[], "Source":[], "Score":[], "SortedPath":[],}
-    
+    print("Sorting..", end=" ")
     # Iterate over files in directory
     for dirPath, dList, fList in os.walk(inRootPath):
         # Open file
@@ -52,6 +53,7 @@ def retrainMarvin(organizedPath:str, marvin:marv.MarvinOrganizer):
     reportFile = os.path.join(organizedPath ,"marvinOrganizerReport.csv")
     #reportDct = {"OriginalPath":[], "SortedPath":[], "Source":[], "Score":[]}
     trainDataDF = pd.read_csv(reportFile)
+    print("Retraining..", end=" ")
     # Iterate over the report and fixedd the directory tree according to the indicated source in the report file
     for idx, r in trainDataDF.iterrows():
         desiredFolder = r["Source"]
@@ -71,7 +73,7 @@ def retrainMarvin(organizedPath:str, marvin:marv.MarvinOrganizer):
     if DDEBUG is False:
         marvin.toJson()
 
-if __name__ == "__main__":
+def run(args):
     version = marv.CST_MODEL_VERSION
     modelPath = "./Model/"
     saveModelName = 'marvinOrganizer_'+"_FastTxt"+version
@@ -81,23 +83,11 @@ if __name__ == "__main__":
     marvin = marv.MarvinOrganizer()
     if os.path.exists(modelPath+signatureModelName): # load the model
         marvin.fromJson(modelPath+signatureModelName)
-    else: # Build the dataset 
+        print("Model Loaded..")
+    else: 
         print("Marvin model not found, exiting.")
-        pass
+        return
 
-    arguments = sys.argv
-    cmdParser = argparse.ArgumentParser(description='Sort statement files according to RYLTY source .')
-    cmdParser.add_argument("input_folder", 
-                        type=str, 
-                        help="root folder to sort")
-    cmdParser.add_argument("-o", "--output_folder", 
-                        type=str, 
-                        help="root folder where to store the sorted files (Optionnal). Defaults to $rootFolder +\' Organized\'",
-                        default="Default")
-    cmdParser.add_argument("-r", "--retrain",
-                        help="Fix the mistakes in the Organized file system based on sources given in  $rootFolder +\' Organized\'/marvinOrganizerReport.csv",
-                        action='store_true')
-    args = cmdParser.parse_args()
     inRootPath = args.input_folder
     outRootPath = args.output_folder
     retrain = args.retrain
@@ -118,3 +108,27 @@ if __name__ == "__main__":
     else:
         # Update Marvin according to the instructions given in "marvinOrganizerReport.csv"
         retrainMarvin(outRootPath, marvin)
+    print("done !")
+    return
+# Use Cli2Gui as a decorator to convert CLI into a GUI, using freesimplegui
+#@Cli2Gui(run_function=run, gui="pysimpleguiweb")
+# 
+@Gooey
+def main():
+    # cmdParser = argparse.ArgumentParser(description='Sort statement files according to RYLTY source .')
+    cmdParser = GooeyParser(description='Sort statement files according to RYLTY source .')
+    cmdParser.add_argument("input_folder", 
+                        type=str, 
+                        help="root folder to sort")
+    cmdParser.add_argument("-o", "--output_folder", 
+                        type=str, 
+                        help="root folder where to store the sorted files (Optionnal). Defaults to $rootFolder +\' Organized\'",
+                        default="Default")
+    cmdParser.add_argument("-r", "--retrain",
+                        help="Fix the mistakes in the Organized file system based on sources given in  $rootFolder +\' Organized\'/marvinOrganizerReport.csv",
+                        action='store_true')
+    args = cmdParser.parse_args()
+    run(args)
+
+if __name__ == "__main__":
+    main()
