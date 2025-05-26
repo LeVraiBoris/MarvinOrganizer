@@ -1,5 +1,6 @@
 import os
 import re
+from tkinter import Widget
 import marvinOrganizer as marv
 import argparse
 import sys
@@ -118,7 +119,7 @@ def main():
     # cmdParser = argparse.ArgumentParser(description='Sort statement files according to RYLTY source .')
     cmdParser = GooeyParser(description='Sort statement files according to RYLTY source .')
     cmdParser.add_argument("input_folder", 
-                        type=str, 
+                        widget = 'DirChooser',
                         help="root folder to sort")
     cmdParser.add_argument("-o", "--output_folder", 
                         type=str, 
