@@ -1,26 +1,35 @@
 import os
 import re
-from tkinter import Widget
+
 import marvinOrganizer as marv
 import argparse
 import sys
 import numpy as np
 import shutil
 import pandas as pd
-#from cli2gui import Cli2Gui
+
 from gooey import Gooey, GooeyParser
-DDEBUG = False
+DDEBUG = True
 CST_MIN_CONFIDENCE = 0.0
+CST_TAB_EXTENSIONS = ['csv', 'xl', 'xls', 'xlsx', 'txt', 'tab']
+CST_PDF_EXTENSIONS = ['pdf']
 
 def sortFolder(inRootPath:str, outRootPath:str, marvin:marv.MarvinOrganizer):
     reportFile = os.path.join(outRootPath ,"marvinOrganizerReport.csv")
-    reportDct = {"OriginalPath":[], "Filename":[], "Source":[], "Score":[], "SortedPath":[],}
+    reportDct = {"OriginalPath":[], "Filename":[], "FileType":[], "Source":[], "Score":[], "SortedPath":[],}
     print("Sorting..", end=" ")
     # Iterate over files in directory
     for dirPath, dList, fList in os.walk(inRootPath):
         # Open file
         for f in fList:
             fPath = os.path.join(dirPath, f)
+            ext = marvin.utils.normalizeString(f.split(".")[-1])
+            if ext in CST_TAB_EXTENSIONS:
+                fileType = "Tabular"
+            elif ext in CST_PDF_EXTENSIONS:
+                fileType = "Pdf"
+            else:
+                fileType = "Other"
             source, sourceScore = marvin.getSources(fPath)
             sourceLabel="Unsorted"
             score = -1
@@ -37,12 +46,16 @@ def sortFolder(inRootPath:str, outRootPath:str, marvin:marv.MarvinOrganizer):
             else:
                 destDir = os.path.join(outRootPath, "Unsorted")
 
+            destFile = os.path.join(destDir, f)
+            if os.path.exists(destFile):
+                destDir = os.path.join(outRootPath,"Duplicates")
+                destFile = os.path.join(destDir, f)
             if not os.path.isdir(destDir):
                 os.mkdir(destDir)
-            destFile = os.path.join(destDir, f)
             shutil.copyfile(fPath, destFile)
             reportDct["OriginalPath"].append(fPath)
             reportDct["Filename"].append(f)
+            reportDct['FileType'].append(fileType)
             reportDct['Source'].append(sourceLabel)
             reportDct["Score"].append(score)
             reportDct['SortedPath'].append(destDir)
@@ -54,23 +67,33 @@ def retrainMarvin(organizedPath:str, marvin:marv.MarvinOrganizer):
     reportFile = os.path.join(organizedPath ,"marvinOrganizerReport.csv")
     #reportDct = {"OriginalPath":[], "SortedPath":[], "Source":[], "Score":[]}
     trainDataDF = pd.read_csv(reportFile)
+    duplicatesPath = os.path.join(organizedPath, "Duplicates")
     print("Retraining..", end=" ")
-    # Iterate over the report and fixedd the directory tree according to the indicated source in the report file
+
+    # Iterate over the report and fixed the directory tree according to the indicated source in the report file
+     # Iterate over the report and fixedd the directory tree according to the indicated source in the report file
     for idx, r in trainDataDF.iterrows():
         desiredFolder = r["Source"]
-        desiredPath = os.path.join(organizedPath, desiredFolder)
+        fileType = r["FileType"]
+        print(organizedPath," + ", desiredFolder)
+        if fileType == "Tabular":
+            desiredPath = os.path.join(organizedPath, desiredFolder)
+        else:
+            desiredFolder = desiredFolder + " " + fileType
+            desiredPath = os.path.join(organizedPath, desiredFolder)
         realPath = r["SortedPath"]
-        if desiredPath != realPath:
-            # Move the file 
-            srcFile = os.path.join(realPath, r["Filename"])
-            destFile = os.path.join(desiredPath, r["Filename"])
-            marvin.updateFromFile(srcFile, r["Source"])
-            trainDataDF.loc[idx, "SortedPath"] = desiredPath
-            if not os.path.isdir(desiredPath):
-                os.mkdir(desiredPath)
-            os.rename(srcFile, destFile)
+        if realPath != duplicatesPath:
+            if desiredPath != realPath:
+                # Move the file 
+                srcFile = os.path.join(realPath, r["Filename"])
+                destFile = os.path.join(desiredPath, r["Filename"])
+                marvin.updateFromFile(srcFile, r["Source"])
+                if not os.path.isdir(desiredPath):
+                    os.mkdir(desiredPath)
+                if os.path.exists(destFile) is not True:
+                    os.rename(srcFile, destFile)
+                trainDataDF.loc[idx, "SortedPath"] = desiredPath
     trainDataDF.to_csv(reportFile)
-
     if DDEBUG is False:
         marvin.toJson()
 
@@ -91,17 +114,22 @@ def run(args):
 
     inRootPath = args.input_folder
     outRootPath = args.output_folder
-    retrain = args.retrain
+    retrain = args.fix
+    deleteOutPath = args.delete_existing
     if outRootPath == "Default":
         outRootPath = inRootPath[:-1] if inRootPath[-1]=="/" else inRootPath
         outRootPath = outRootPath+" Organized"
 
-    if not os.path.isdir(outRootPath):
-        if retrain is True:
-            print("Organized folder not found. Exiting..")
-            pass
-        else:
+    if retrain is False:
+        if not os.path.isdir(outRootPath):
             os.mkdir(outRootPath)
+        elif deleteOutPath is True:
+            shutil.rmtree(outRootPath)
+            os.mkdir(outRootPath)
+    else:
+        if not os.path.isdir(outRootPath):
+            print("Organized folder not found. Exiting..")
+            return
 
     if retrain is False:
         # Sort the input folder 
@@ -111,25 +139,42 @@ def run(args):
         retrainMarvin(outRootPath, marvin)
     print("done !")
     return
-# Use Cli2Gui as a decorator to convert CLI into a GUI, using freesimplegui
-#@Cli2Gui(run_function=run, gui="pysimpleguiweb")
-# 
-@Gooey
+
 def main():
-    # cmdParser = argparse.ArgumentParser(description='Sort statement files according to RYLTY source .')
-    cmdParser = GooeyParser(description='Sort statement files according to RYLTY source .')
-    cmdParser.add_argument("input_folder", 
-                        widget = 'DirChooser',
-                        help="root folder to sort")
-    cmdParser.add_argument("-o", "--output_folder", 
-                        type=str, 
-                        help="root folder where to store the sorted files (Optionnal). Defaults to $rootFolder +\' Organized\'",
-                        default="Default")
-    cmdParser.add_argument("-r", "--retrain",
-                        help="Fix the mistakes in the Organized file system based on sources given in  $rootFolder +\' Organized\'/marvinOrganizerReport.csv",
-                        action='store_true')
+    if DDEBUG is True:
+        cmdParser = argparse.ArgumentParser(description='Sort statement files according to RYLTY source .')
+        cmdParser.add_argument("input_folder", 
+                                help="Folder to sort (aka $inputDir)")
+        cmdParser.add_argument("-o", "--output_folder", 
+                                help="output folder for the sorted files (Optionnal). Defaults to $rootFolder +\' Organized\' (aka $outputDir)",
+                                default="Default")
+        cmdParser.add_argument("-d", "--delete_existing",
+                            help="Delete pre-existing output folder (default) unless \'--fix\' is checked",
+                            action='store_false')
+        cmdParser.add_argument("-f", "--fix",
+                            help="Fix the mistakes in the Organized file system based on sources given in  $outputDir/marvinOrganizerReport.csv",
+                            action='store_true')
+    else:
+        cmdParser = GooeyParser(description='Sort statement files according to RYLTY source .')
+        cmdParser.add_argument("input_folder", 
+                            widget = 'DirChooser',
+                            help="Folder to sort (aka $inputDir)")
+        cmdParser.add_argument("-o", "--output_folder", 
+                            widget = 'DirChooser',
+                            help="output folder for the sorted files (Optionnal). Defaults to $rootFolder +\' Organized\' (aka $outputDir)",
+                            default="Default")
+        cmdParser.add_argument("-d", "--delete_existing",
+                            help="Delete pre-existing output folder (default) unless \'--fix\' is checked",
+                            action='store_false')
+        cmdParser.add_argument("-f", "--fix",
+                            help="Fix the mistakes in the Organized file system based on sources given in  $outputDir/marvinOrganizerReport.csv",
+                            action='store_true')
     args = cmdParser.parse_args()
     run(args)
 
 if __name__ == "__main__":
-    main()
+    if DDEBUG is True: # CLI only 
+        main()
+    else: # Use GUI if DDBUG is False
+        main = Gooey(main)
+        main()

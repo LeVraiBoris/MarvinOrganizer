@@ -8,7 +8,7 @@ import re
 from unidecode import unidecode
 from gensim.models.fasttext import FastText
 from tqdm import tqdm
-from scipy.special import softmax
+# from scipy.special import softmax
 
 import gemsimUtils
 
