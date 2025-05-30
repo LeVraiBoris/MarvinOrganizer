@@ -141,7 +141,7 @@ class MarvinOrganizerUtils:
             #     txt = self.readPdf(filename)
             if ext == 'csv':
                 df = self.readCSV(filename)
-            elif ext == 'xls' or ext == 'xlsx':
+            elif ext == 'xls' or ext == 'xlsx' or ext  == 'xlsb':
                 df = self.readXLS(filename)
         except Exception as inst:
             emb = []

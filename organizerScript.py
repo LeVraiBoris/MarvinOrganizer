@@ -1,5 +1,6 @@
 import os
 import re
+from zipfile import ZipFile
 
 import marvinOrganizer as marv
 import argparse
@@ -9,10 +10,37 @@ import shutil
 import pandas as pd
 
 from gooey import Gooey, GooeyParser
-DDEBUG = True
+DDEBUG = False
 CST_MIN_CONFIDENCE = 0.0
 CST_TAB_EXTENSIONS = ['csv', 'xl', 'xls', 'xlsx', 'txt', 'tab']
 CST_PDF_EXTENSIONS = ['pdf']
+CST_ZIP_EXTENSIONS = ['zip', 'gzip']
+
+def unzipInPlace(inRootPath:str, marvin:marv.MarvinOrganizer):
+    """Go down the directory tree and unpack every zip archive that is found.
+
+    Args:
+        inRootPath (str): path to the folder to sort
+        marvin (marv.MarvinOrganizer): an instance of the Marvin organizer 
+    """
+    for dirPath, dList, fList in os.walk(inRootPath):
+        for f in fList:
+            ext = marvin.utils.normalizeString(f.split(".")[-1])
+            if ext in CST_ZIP_EXTENSIONS:
+                zipDir = os.path.join(dirPath, "Zips")
+                if not os.path.exists(zipDir):
+                    os.mkdir(zipDir)
+                fPath = os.path.join(dirPath, f)
+                with ZipFile(fPath) as arch:
+                    arch.extractall(zipDir)
+                    # We go as far as searching for zips inside zips
+                    for f in os.listdir(zipDir):
+                        ext = marvin.utils.normalizeString(f.split(".")[-1])
+                        if ext in CST_ZIP_EXTENSIONS:
+                            fPath = os.path.join(zipDir, f)
+                            with ZipFile(fPath) as arch:
+                                arch.extractall(zipDir)
+
 
 def sortFolder(inRootPath:str, outRootPath:str, marvin:marv.MarvinOrganizer):
     reportFile = os.path.join(outRootPath ,"marvinOrganizerReport.csv")
@@ -115,12 +143,16 @@ def run(args):
     inRootPath = args.input_folder
     outRootPath = args.output_folder
     retrain = args.fix
+    unzip = args.unzip_all
+
     deleteOutPath = args.delete_existing
     if outRootPath == "Default":
         outRootPath = inRootPath[:-1] if inRootPath[-1]=="/" else inRootPath
         outRootPath = outRootPath+" Organized"
 
     if retrain is False:
+        if unzip is True:
+            unzipInPlace(inRootPath,marvin)
         if not os.path.isdir(outRootPath):
             os.mkdir(outRootPath)
         elif deleteOutPath is True:
@@ -148,12 +180,7 @@ def main():
         cmdParser.add_argument("-o", "--output_folder", 
                                 help="output folder for the sorted files (Optionnal). Defaults to $rootFolder +\' Organized\' (aka $outputDir)",
                                 default="Default")
-        cmdParser.add_argument("-d", "--delete_existing",
-                            help="Delete pre-existing output folder (default) unless \'--fix\' is checked",
-                            action='store_false')
-        cmdParser.add_argument("-f", "--fix",
-                            help="Fix the mistakes in the Organized file system based on sources given in  $outputDir/marvinOrganizerReport.csv",
-                            action='store_true')
+
     else:
         cmdParser = GooeyParser(description='Sort statement files according to RYLTY source .')
         cmdParser.add_argument("input_folder", 
@@ -163,12 +190,15 @@ def main():
                             widget = 'DirChooser',
                             help="output folder for the sorted files (Optionnal). Defaults to $rootFolder +\' Organized\' (aka $outputDir)",
                             default="Default")
-        cmdParser.add_argument("-d", "--delete_existing",
-                            help="Delete pre-existing output folder (default) unless \'--fix\' is checked",
-                            action='store_false')
-        cmdParser.add_argument("-f", "--fix",
-                            help="Fix the mistakes in the Organized file system based on sources given in  $outputDir/marvinOrganizerReport.csv",
-                            action='store_true')
+    cmdParser.add_argument("-d", "--delete_existing",
+                    help="Delete pre-existing output folder (default) unless \'--fix\' is checked",
+                    action='store_false')
+    cmdParser.add_argument("-f", "--fix",
+                    help="Fix the mistakes in the Organized file system based on sources given in  $outputDir/marvinOrganizerReport.csv",
+                    action='store_true')
+    cmdParser.add_argument("-z", "--unzip_all",
+                    help="Unzip all archives found in $inputDir before sorting",
+                    action='store_false')
     args = cmdParser.parse_args()
     run(args)
 
