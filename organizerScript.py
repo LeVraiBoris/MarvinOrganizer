@@ -12,7 +12,7 @@ import pandas as pd
 from gooey import Gooey, GooeyParser
 DDEBUG = False
 CST_MIN_CONFIDENCE = 0.0
-CST_TAB_EXTENSIONS = ['csv', 'xl', 'xls', 'xlsx', 'txt', 'tab']
+CST_TAB_EXTENSIONS = ['csv', 'xl', 'xls', 'xlsx', 'txt', 'tab', 'xlsb']
 CST_PDF_EXTENSIONS = ['pdf']
 CST_ZIP_EXTENSIONS = ['zip', 'gzip']
 
