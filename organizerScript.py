@@ -1,4 +1,5 @@
 import os
+from posixpath import basename
 import re
 from zipfile import ZipFile
 
@@ -11,6 +12,7 @@ import pandas as pd
 
 from gooey import Gooey, GooeyParser
 DDEBUG = False
+UPDATE_MODEL = True
 CST_MIN_CONFIDENCE = 0.0
 CST_TAB_EXTENSIONS = ['csv', 'xl', 'xls', 'xlsx', 'txt', 'tab', 'xlsb']
 CST_PDF_EXTENSIONS = ['pdf']
@@ -115,7 +117,8 @@ def retrainMarvin(organizedPath:str, marvin:marv.MarvinOrganizer):
                 # Move the file 
                 srcFile = os.path.join(realPath, r["Filename"])
                 destFile = os.path.join(desiredPath, r["Filename"])
-                marvin.updateFromFile(srcFile, r["Source"])
+                if UPDATE_MODEL is True:
+                    marvin.updateFromFile(srcFile, r["Source"])
                 if not os.path.isdir(desiredPath):
                     os.mkdir(desiredPath)
                 if os.path.exists(destFile) is not True:
@@ -144,15 +147,23 @@ def run(args):
     outRootPath = args.output_folder
     retrain = args.fix
     unzip = args.unzip_all
-
     deleteOutPath = args.delete_existing
     if outRootPath == "Default":
-        outRootPath = inRootPath[:-1] if inRootPath[-1]=="/" else inRootPath
-        outRootPath = outRootPath+" Organized"
+        if retrain is False:
+            basePath = os.path.dirname(inRootPath) 
+            outFolderName = os.path.basename(inRootPath) + ' Organized'
+            outRootPath = os.path.join(basePath, outFolderName) 
+        else:
+            if os.path.exists(os.path.join(inRootPath,'marvinOrganizerReport.csv')):
+                outRootPath = inRootPath
+            else:
+                basePath = os.path.dirname(inRootPath) 
+                outFolderName = os.path.basename(inRootPath) + ' Organized'
+                outRootPath = os.path.join(basePath, outFolderName) 
 
     if retrain is False:
         if unzip is True:
-            unzipInPlace(inRootPath,marvin)
+            unzipInPlace(inRootPath, marvin)
         if not os.path.isdir(outRootPath):
             os.mkdir(outRootPath)
         elif deleteOutPath is True:
@@ -163,6 +174,9 @@ def run(args):
             print("Organized folder not found. Exiting..")
             return
 
+    print("In path: ", inRootPath)
+    print("Out path: ", outRootPath)
+    
     if retrain is False:
         # Sort the input folder 
         sortFolder(inRootPath, outRootPath, marvin)
@@ -192,13 +206,13 @@ def main():
                             default="Default")
     cmdParser.add_argument("-d", "--delete_existing",
                     help="Delete pre-existing output folder (default) unless \'--fix\' is checked",
-                    action='store_false')
+                    action='store_true')
     cmdParser.add_argument("-f", "--fix",
                     help="Fix the mistakes in the Organized file system based on sources given in  $outputDir/marvinOrganizerReport.csv",
                     action='store_true')
     cmdParser.add_argument("-z", "--unzip_all",
                     help="Unzip all archives found in $inputDir before sorting",
-                    action='store_false')
+                    action='store_true')
     args = cmdParser.parse_args()
     run(args)
 
