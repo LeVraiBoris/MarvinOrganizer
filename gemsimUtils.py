@@ -1,7 +1,7 @@
 # Build a Fasttext feature vector based on the Marvin Organizer's vocabulary.
 from pprint import pprint as print
 from gensim.models.fasttext import FastText
-from gensim.test.utils import datapath
+#from gensim.test.utils import datapath
 
 from unidecode import unidecode
 import glob
@@ -36,22 +36,22 @@ def loadCorpusData(path):
 	return allData
 
 
-corpusData = loadCorpusData(jsPath)
-sortedFiles = []
-for jf in corpusData:
-	newClass = True
-	for cls in sortedFiles:
-		if jf["vct"] == cls["vct"]:
-			cls["fileList"].append(jf["file"])
-			newClass = False
-	if newClass is True:
-		sortedFiles.append({"vct": jf["vct"], "fileList": [jf["file"]]})
+# corpusData = loadCorpusData(jsPath)
+# sortedFiles = []
+# for jf in corpusData:
+# 	newClass = True
+# 	for cls in sortedFiles:
+# 		if jf["vct"] == cls["vct"]:
+# 			cls["fileList"].append(jf["file"])
+# 			newClass = False
+# 	if newClass is True:
+# 		sortedFiles.append({"vct": jf["vct"], "fileList": [jf["file"]]})
 
-with open(jsPath+"log.txt", 'a') as f:
-	for sd in sortedFiles:
-		f.write("\n ========= \n")
-		for d in sd["fileList"]:
-			f.write(d+"\n")
+# with open(jsPath+"log.txt", 'a') as f:
+# 	for sd in sortedFiles:
+# 		f.write("\n ========= \n")
+# 		for d in sd["fileList"]:
+# 			f.write(d+"\n")
 
 ##################
 # Train a Gensim fastext model on the corpus

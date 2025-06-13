@@ -1,1 +1,0 @@
-../OcrUtils/ryltyPdfParser.py

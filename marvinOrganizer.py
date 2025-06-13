@@ -8,12 +8,12 @@ import re
 from unidecode import unidecode
 from gensim.models.fasttext import FastText
 from tqdm import tqdm
-from scipy.special import softmax
+# from scipy.special import softmax
 
 import gemsimUtils
 
-CST_MODEL_VERSION = "V1"
-CST_VCT_TYPE = "FastTxtAvg"
+CST_MODEL_VERSION = "v5"
+CST_VCT_TYPE = "FastTxtHash"
 #@TODO Remove files built with terylty template:
 # statementDate,title,workId,incomeSource,sourceGrossIncome,royaltyAmount,incomeType,distributionType,featuredArtist,country,perfCount
 
@@ -44,11 +44,35 @@ class MarvinOrganizerUtils:
             str: a string representing the vector
         """
         depth = 3
-        vct = np.round(np.array(vct) * 10**depth) / 10** depth
+        vct = np.round(np.array(vct) * 10**depth) / 10**depth
         vctStr = "["+", ".join([str(v) for v in vct])+"]"
         return vctStr
     
+    def vctToHash(self, vct:list):
+        """convert a vector to a hash code
+
+        Args:
+            vct (list): list of array of float values
+        Returns:
+            int: hash code representing the vector
+        """
+        depth = 10**5
+        vctA = np.array(vct)
+        # Reduce the floating point precision so that we can deal with the precision loss when loading/saving the data.
+        hashKey = hash(tuple(np.round(vctA*depth)/depth)) 
+        return hashKey
+    
     def buildTextEmbedding(self,txt):
+        """Build a vector representation of a text of arbitrary lenght.
+
+            The resulting vector is the unit lenght average of the fastText representation of each word in the text
+
+        Args:
+            txt (str): input text
+
+        Returns:
+            array: vector representation of the text
+        """
         if len(txt.strip()) == 0:
             return None
         wLstClean = txt.split()
@@ -76,6 +100,8 @@ class MarvinOrganizerUtils:
     
     def rebuildDFHeader(self, df:pd.DataFrame):
         """Check if the data frame contains a header before the genuine data and drops de corresponding lines
+
+           @WARNING: EXPERIMENTAL CODE NOT KNOWN TO WORK VERY RELIABLY
 
         Args:
             df (pd.DataFrame): dataframe to fix
@@ -105,7 +131,8 @@ class MarvinOrganizerUtils:
         return df
 
     def buildFileEmbedding(self, filename):
-        txt = ""
+        col2idx = {}
+        idx2col = {}
         df = None
         emb = []
         ext = filename.split('.')[-1].lower()
@@ -114,7 +141,7 @@ class MarvinOrganizerUtils:
             #     txt = self.readPdf(filename)
             if ext == 'csv':
                 df = self.readCSV(filename)
-            elif ext == 'xls' or ext == 'xlsx':
+            elif ext == 'xls' or ext == 'xlsx' or ext  == 'xlsb':
                 df = self.readXLS(filename)
         except Exception as inst:
             emb = []
@@ -122,17 +149,36 @@ class MarvinOrganizerUtils:
             print(type(inst))
             print(inst)
             return emb
-        if df is not None:
-            cols = list(df.columns)
-            cols = [str(c) for c in cols]
-            txt = " ".join(cols)
-            emb = self.buildTextEmbedding(txt)
-        return emb, txt, filename
+        if df is not None and not df.empty:
+            emb, col2idx, idx2col = self.buildDataFrameEmbedding(df)
+        return emb, col2idx, idx2col, filename
     
-    def readPdf(self, filename):
-        self.pdfParser.loadPdf(filename)
-        txt = ''.join(self.pdfParser.pageText)
-        return txt
+    def buildDataFrameEmbedding(self, df):
+        def isDegenerated(c):
+            tst = False
+            if isinstance(c, str):
+                tst = "Unnamed" in c
+            else:
+                tst = np.isnan(c)
+            return tst
+        
+        cols = list(df.columns)
+        rowOffset = 0
+        # Skip some header rows if they are all Unamed or NaN
+        while all(isDegenerated(c) for c in cols):
+            cols = df.iloc[rowOffset]
+            rowOffset += 1
+        cols = [str(c) for c in cols]
+        txt = " ".join(cols)
+        col2idx = {c:i for i,c in enumerate(cols)}
+        idx2col = {i:c for i,c in enumerate(cols)}
+        emb = self.buildTextEmbedding(txt)
+        return emb, col2idx, idx2col
+    
+    # def readPdf(self, filename):
+    #     self.pdfParser.loadPdf(filename)
+    #     txt = ''.join(self.pdfParser.pageText)
+    #     return txt
     
     def readCSV(self, filename):
         sepLst=[',',';','\t']
@@ -140,7 +186,7 @@ class MarvinOrganizerUtils:
         for s in sepLst:
             if df is None:
                 try:
-                    df = pd.read_csv(filename, sep=s,engine='python', encoding="utf_8", nrows=10, low_memory=False)
+                    df = pd.read_csv(filename, sep=s,engine='python', encoding="utf_8", nrows=10)
                 except:
                     try:
                         df = pd.read_csv(filename, sep=s,engine='c', encoding="utf_8", nrows=10, low_memory=False)
@@ -152,6 +198,8 @@ class MarvinOrganizerUtils:
                                 df = pd.read_csv(filename, sep=s,engine='c', encoding='latin_1', nrows=10, low_memory=False)
                             except:
                                 df = None
+            if df is not None and df.shape[1] == 1:
+                df = None
         return df
 
     def readXLS (self, filename):
@@ -179,6 +227,7 @@ class MarvinOrganizerUtils:
                         df = None
         self.fixXLErr14.stop()
         return df
+
 
 class MarvinOrganizerData():
 
@@ -208,14 +257,13 @@ class MarvinOrganizerData():
                 for d in folderData:
                     d["classNum"] = classNum
                     d["lbl"] = label
-            # with open(txtFile, "r") as f:
-            #     folderTxt = f.readlines()
         else:
             fileList = os.listdir(path)
             embList = list((Parallel(n_jobs=-1)(delayed(utils.buildFileEmbedding)(path + f) for f in fileList)))
             if len(embList) > 0:
-                folderData = [{ "file": v[2],
-                                "txt":v[1],
+                folderData = [{ "file": v[3],
+                                "col2idx":v[1],
+                                "idx2col":v[2],
                                 "vct": [float(i) for i in v[0]],
                                 "classNum": classNum, "lbl": label} for v in embList if (len(v) > 0) and (len(v[0]) > 0)]
 
@@ -225,8 +273,8 @@ class MarvinOrganizerData():
             # self.txt = self.txt + folderTxt
             self.label2id[label] = classNum
             self.id2label[classNum] = label
-            with open(jsonFile,"w") as f:
-                json.dump(folderData, f)
+            with open(jsonFile,"w") as jf:
+               json.dump(folderData, jf)
 
     def loadAll(self, root):
         """Load an entire directory tree and infers the class name from the directory names.
@@ -282,38 +330,55 @@ class MarvinOrganizerData():
 
     def len(self):
         return len(self.data)
-    
+
 
 class MarvinOrganizer():
     minCossim = 1 # Only acccept perfectMatches 
     def __init__(self):
+        """Basic constructor, nothing to see here.
+        """
         self.utils = MarvinOrganizerUtils()
-        pass
 
-    def learnFileFormat(self, file:str, label:str):
-        """Add a file to the already known formats.
 
-            If the format is known, the corresponding priors are updated
+    def updateFromFile(self, file:str, label:str, ruleKey:int=None, wizardKey:int=None):
+        """Add a single file to the model.
+
+            If the format is not know, a new category is created 
+            If the format is known, the corresponding priors are updated.
+
 
         Args:
             file (str): string or path to the file
-            label (str): label of the file (statment source)
+            label (str): label of the file (statement source)
+            ruleKey (int): key to identify the backend rule used to read the file. Optionnal defaults to None
+            wizardKey (int): key to identify the import wizard template used to read the file. Optionnal defaults to None
         """
-        emb = self.utils.buildFileEmbedding(file)
-        embStr = utils.vctToString(emb)
-        self.sourceCount[label] += 1
-        self.sourceVectors[label] += [emb]
-        if embStr in self.vectorSources.keys():
-            if label not in self.vectorSources[embStr]:
+        emb, col2id, id2col, _ = self.utils.buildFileEmbedding(file)
+        if len(emb) == 0 :
+            # If the file cannot be read just ignore it 
+            return
+        embStr = str(self.utils.vctToHash(emb))
+        if label in self.sourceCount.keys(): # If I know the source, update the count 
+            self.sourceCount[label] += 1
+        else: # else create a new source
+            self.sourceCount[label] = 1
+            self.sourceVectors[label] = [emb.tolist()]
+        if embStr in self.vectorSources.keys(): # If I know the format 
+            if label not in self.vectorSources[embStr]: # But not the source, create the source
                 self.vectorSources[embStr] += [label]
                 self.vectorSourcesCount[embStr][label] = 1
-            else: 
+            else: # Update the source counts
                 self.vectorSourcesCount[embStr][label] += 1
             self.vectorCount[embStr] += 1
-        else:
+        else: # I don't know the format 
             self.vectorSources[embStr] = [label]
             self.vectorSourcesCount[embStr] = {label:1}
             self.vectorCount[embStr] = 1
+            self.col2idx[embStr] = col2id
+            self.idx2col[embStr] = id2col
+             #@TODO Update those once the information becomes available
+            self.vector2Rules[embStr] = ruleKey
+            self.vector2Wizard[embStr] = wizardKey
         self.__countsToProba__()
 
     def fromDataset(self, dataset:MarvinOrganizerData):
@@ -321,34 +386,44 @@ class MarvinOrganizer():
         self.label2id = dataset.label2id
         self.sourceVectors = {k:[] for k in self.label2id.keys()}
         self.sourceCount = {k:0 for k in self.label2id.keys()}
-        self.sourceProba = {k:0 for k in self.label2id.keys()}
+        # self.sourceProba = {k:0 for k in self.label2id.keys()}
+        self.col2idx = {}
+        self.idx2col = {} 
         self.vectorSources = {}
         self.vectorSourcesCount = {}
         self.vectorSourcesProba = {}
         self.vectorCount = {}
         self.vectorProba = {}
+        self.col2idx = {}
+        self.vector2Wizard = {}
+        self.vector2Rules = {}
         print("Building model...")
         for s in tqdm(dataset.data, total=dataset.len()):
             v = s['vct']
             lbl = s['lbl']
-            k = utils.vctToString(v)
+            embHash = str(self.utils.vctToHash(v))
+            self.col2idx[embHash] = s['col2idx']
+            self.idx2col[embHash]= s['idx2col']
             self.sourceCount[lbl] += 1
             self.sourceVectors[lbl] += [v]
-            if k in self.vectorSources.keys():
-                if lbl not in self.vectorSources[k]:
-                    self.vectorSources[k] += [lbl]
-                    self.vectorSourcesCount[k][lbl] = 1
+            #@TODO Update those once the information becomes available
+            self.vector2Wizard[embHash] = None
+            self.vector2Rules[embHash] = None
+            if embHash in self.vectorSources.keys():
+                if lbl not in self.vectorSources[embHash]:
+                    self.vectorSources[embHash] += [lbl]
+                    self.vectorSourcesCount[embHash][lbl] = 1
                 else: 
-                    self.vectorSourcesCount[k][lbl] += 1
-                self.vectorCount[k] += 1
+                    self.vectorSourcesCount[embHash][lbl] += 1
+                self.vectorCount[embHash] += 1
             else:
-                self.vectorSources[k] = [lbl]
-                self.vectorSourcesCount[k] = {lbl:1}
-                self.vectorCount[k] = 1
+                self.vectorSources[embHash] = [lbl]
+                self.vectorSourcesCount[embHash] = {lbl:1}
+                self.vectorCount[embHash] = 1
         self.__countsToProba__()
 
     def __countsToProba__(self):
-        """Utility function, convert vector and source counts to probability distribution.
+        """Utility function, convert vector and source counts to probability distributions.
 
             Uses Softmax for that.
             Also updates self.lbl2id and self.id2lbl to match class names (rylty sources) and the label number
@@ -357,22 +432,19 @@ class MarvinOrganizer():
         srcProba = [self.sourceCount[k] for k in self.sourceCount.keys()]
         srcProba = np.exp(srcProba/np.sum(srcProba)) # Data is normalized to a unit vector to keep it numericaly behaved
         srcProba = srcProba/np.sum(srcProba)
-        for i, k in enumerate(self.sourceCount.keys()):
-            self.sourceProba[k] = srcProba[i]
-        # Compute the prior probability of each class
+        self.sourceProba = {k:p for k, p in zip(self.sourceCount.keys(), srcProba)}
+        # Compute the prior probability of each embedding vector
         vctProba = [self.vectorCount[k] for k in self.vectorCount.keys()]
         vctProba = np.exp(vctProba / np.sum(vctProba))# Data is normalized to a unit vector to keep it numericaly behaved
         vctProba = vctProba / np.sum(vctProba)
-        for (i,k) in enumerate(self.vectorCount.keys()):
-            self.vectorProba[k] = vctProba[i]
-        # Compute the conditionnal probablility P(Lbl|Vct)
+        self.vectorProba = {k:p for k, p in zip(self.vectorCount.keys(), vctProba)}
+        # Compute the conditionnal probablility P(Vct|Lbl)
+        self.vectorSourcesProba = {}
         for srcK in self.vectorSources.keys():
-            lblsCnts = [self.vectorSourcesCount[srcK][lbl] for lbl in self.vectorSourcesCount[srcK].keys()]
-            lblsCnts = np.exp(lblsCnts / np.sum(lblsCnts))# Data is normalized to a unit vector to keep it numericaly behaved
-            lblsCnts = lblsCnts / np.sum(lblsCnts)
-            self.vectorSourcesProba[srcK] = {}
-            for i, k in enumerate(self.vectorSourcesCount[srcK].keys()):
-                self.vectorSourcesProba[srcK][k] = lblsCnts[i]
+            lblsProba = [self.vectorSourcesCount[srcK][lbl] for lbl in self.vectorSourcesCount[srcK].keys()]
+            lblsProba = np.exp(lblsProba / np.sum(lblsProba))# Data is normalized to a unit vector to keep it numericaly behaved
+            lblsProba = lblsProba / np.sum(lblsProba)
+            self.vectorSourcesProba[srcK] = {k:p for k, p in zip(self.vectorSourcesCount[srcK].keys(), lblsProba)}
         for i,k in enumerate(self.sourceProba.keys()):
             self.label2id[k] = i
             self.id2label[i] = k
@@ -382,45 +454,50 @@ class MarvinOrganizer():
 
         Args:
             fileName (str): path to the file to process
-
         Returns:
             (list): list of labels (royalty sources)
             (list): posterior probability of each hypothesis
         """
-        emb, _, _ = self.utils.buildFileEmbedding(fileName)
+        emb, _, _, _ = self.utils.buildFileEmbedding(fileName)
         sourcesList = []
         sourcesProba = [] 
         if len(emb) == 0 or np.isnan(np.any(emb)):
             return sourcesList, sourcesProba
 
-        embStr = utils.vctToString(emb)
+        embStr = str(self.utils.vctToHash(emb))
         if embStr in self.vectorSources.keys():
-            sources = self.vectorSources[embStr]
+            sourcesList = self.vectorSources[embStr]
             # Compute the posterior of the match based on the computed statistics on the training data set
             # We drop the source prior for now since it looks very disbalanced
             # sourcesProba = [(self.vectorSourcesProba[embStr][k] * self.sourceProba[k] ) /self.vectorProba[embStr] for k in sources]
-            sourcesProba = [self.vectorSourcesProba[embStr][k] for k in sources]
+            sourcesProba = [self.vectorSourcesProba[embStr][k] for k in sourcesList]
             sourcesProba = np.exp(sourcesProba)
             sourcesProba = sourcesProba/np.sum(sourcesProba)
-        return sources, sourcesProba
+        return sourcesList, sourcesProba
  
-    def toJson(self, jsonFile:str):
+    def toJson(self, jsonFile:str=None):
         """Save the current configuration to a json file
 
         Args:
-            jsonFile (str): path to the json file
+            jsonFile (str): path to the json file. reuse the current model is None
         """
         model = {"sourceVectors": self.sourceVectors,
-                 "sourceCount": self.sourceCount,
-                 "vectorCount": self.vectorCount,
-                 "vectorSources": self.vectorSources,
-                 "vectorSourcesCount": self.vectorSourcesCount,
+                "sourceCount": self.sourceCount,
+                "vectorCount": self.vectorCount,
+                "vectorSources": self.vectorSources,
+                "vectorSourcesCount": self.vectorSourcesCount,
+                "col2idx": self.col2idx,
+                "idx2col": self.idx2col,
+                "vec2wiz": self.vector2Wizard,
+                "vec2rule": self.vector2Rules,
                 #  "label2id": self.label2id,
                 #  "id2label": self.id2label
-                 } 
+                } 
+        if jsonFile is None:
+            jsonFile = self.jsonFile
+
         with open(jsonFile,'w') as f:
             json.dump(model, f)
-          
 
     def fromJson(self, jsonFile:str):
         """Save the current configuration to a json file
@@ -431,13 +508,20 @@ class MarvinOrganizer():
         with open(jsonFile,'r') as f:
             model = json.load(f)
         self.sourceVectors= model["sourceVectors"]
-        self.sourceCount = model["sourceCounts"]
+        self.sourceCount = model["sourceCount"]
         self.vectorCount = model["vectorCount"]
         self.vectorSources = model["vectorSources"]
         self.vectorSourcesCount = model["vectorSourcesCount"]
-        # self.label2id = model["label2id"]
-        # self.id2label = model["id2label"]
+        self.col2idx = model['col2idx']
+        self.idx2col = model['idx2col']
+        self.vector2Wizard = model['vec2wiz']
+        self.vector2Rules = model['vec2rule']
+        # These will be set by self.__countsToProba__()
+
+        self.label2id = {} #model["label2id"]
+        self.id2label = {} #model["id2label"]
         self.__countsToProba__()
+        self.jsonFile = jsonFile
 
     def addLabelDescription(self, dataset:MarvinOrganizerData):
         """Add label/id information to the model from the training dataset
@@ -448,11 +532,12 @@ class MarvinOrganizer():
         self.label2id = dataset.label2id
         self.id2label = dataset.id2label
 
+
 if __name__ == "__main__":
     # Select task
     marvinMatchTest = True
     trainFastTxt = False
-    version = 'v2.0'
+    version = CST_MODEL_VERSION
     modelPath = "./Model/"
     saveModelName = 'marvinOrganizer_'+"_FastTxt"+version
     loadModelName = 'marvinOrganizer_'+"_FastTxt"+version
@@ -490,20 +575,17 @@ if __name__ == "__main__":
             marvin.fromDataset(data)
             marvin.toJson(modelPath+signatureModelName)
 
-        # rootPath = "./Data/Christopher Liggio/"
-        rootPath = "/Fast/TrainData/RYLTY/Downloads/Organizer/Statement/"
+        rootPath = "/Fast/TrainData/RYLTY/Organizer/Statement/"
         print("+=====================================+")
-        print(" BMI Writer: ")
-        for f in os.listdir(rootPath+"BMI Writer/"):
-            source, sourceScore = marvin.getSources(rootPath+"BMI Writer/"+f)
+        print(" Believe Digital: ")
+        for f in os.listdir(rootPath+"Believe Digital/"):
+            source, sourceScore = marvin.getSources(rootPath+"Believe Digital/"+f)
+            # Note updating for a know source would only update the priors, 
+            # is it really worth it while we work with exact matches only ? 
+            # marvin.updateFromFile(rootPath+"Believe Digital/"+f, label= "Believe Digital")
             print(f, "->", source,": ", sourceScore)
-            
-        print("+=====================================+")
-        print(" Gusto Records: ")
-
-        for f in os.listdir(rootPath+"Gusto Records/"):
-            source, sourceScore = marvin.getSources(rootPath+"Gusto Records/"+f)
-            print(f, "->", source,": ", sourceScore)
-     
-        
-
+            if len(source) == 0:
+                marvin.updateFromFile(rootPath+"Believe Digital/"+f, label= "Goofy Records!!")
+                print(" Added label: Goofy Records!!")
+                source, sourceScore = marvin.getSources(rootPath+"Believe Digital/"+f)
+                print(f, "->", source,": ", sourceScore)
