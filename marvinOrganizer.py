@@ -149,7 +149,7 @@ class MarvinOrganizerUtils:
             print(type(inst))
             print(inst)
             return emb
-        if df is not None:
+        if df is not None and not df.empty:
             emb, col2idx, idx2col = self.buildDataFrameEmbedding(df)
         return emb, col2idx, idx2col, filename
     

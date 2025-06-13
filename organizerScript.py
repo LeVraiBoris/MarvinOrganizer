@@ -27,8 +27,10 @@ def unzipInPlace(inRootPath:str, marvin:marv.MarvinOrganizer):
     """
     for dirPath, dList, fList in os.walk(inRootPath):
         for f in fList:
-            ext = marvin.utils.normalizeString(f.split(".")[-1])
-            if ext in CST_ZIP_EXTENSIONS:
+            split = f.split(".")
+            ext = split[-1]
+            fname = split[0]
+            if len(fname) > 0 and ext in CST_ZIP_EXTENSIONS: # This will ignore hidden files (on an Unix like system)
                 zipDir = os.path.join(dirPath, "Zips")
                 if not os.path.exists(zipDir):
                     os.mkdir(zipDir)
@@ -37,8 +39,10 @@ def unzipInPlace(inRootPath:str, marvin:marv.MarvinOrganizer):
                     arch.extractall(zipDir)
                     # We go as far as searching for zips inside zips
                     for f in os.listdir(zipDir):
-                        ext = marvin.utils.normalizeString(f.split(".")[-1])
-                        if ext in CST_ZIP_EXTENSIONS:
+                        split = f.split(".")
+                        ext = split[-1]
+                        fname = split[0]
+                        if len(fname) > 0 and ext in CST_ZIP_EXTENSIONS: # This will ignore hidden files (on an Unix like system)
                             fPath = os.path.join(zipDir, f)
                             with ZipFile(fPath) as arch:
                                 arch.extractall(zipDir)
