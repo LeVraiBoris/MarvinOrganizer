@@ -9,9 +9,9 @@ import sys
 import numpy as np
 import shutil
 import pandas as pd
-
-from gooey import Gooey, GooeyParser
-DDEBUG = False
+USE_GOOEY = False
+if USE_GOOEY is True:
+    from gooey import Gooey, GooeyParser # Use GUI
 UPDATE_MODEL = True
 CST_MIN_CONFIDENCE = 0.0
 CST_TAB_EXTENSIONS = ['csv', 'xl', 'xls', 'xlsx', 'txt', 'tab', 'xlsb']
@@ -129,7 +129,7 @@ def retrainMarvin(organizedPath:str, marvin:marv.MarvinOrganizer):
                     os.rename(srcFile, destFile)
                 trainDataDF.loc[idx, "SortedPath"] = desiredPath
     trainDataDF.to_csv(reportFile)
-    if DDEBUG is False:
+    if USE_GOOEY is False:
         marvin.toJson()
 
 def run(args):
@@ -191,7 +191,7 @@ def run(args):
     return
 
 def main():
-    if DDEBUG is True:
+    if USE_GOOEY is False:
         cmdParser = argparse.ArgumentParser(description='Sort statement files according to RYLTY source .')
         cmdParser.add_argument("input_folder", 
                                 help="Folder to sort (aka $inputDir)")
@@ -221,8 +221,8 @@ def main():
     run(args)
 
 if __name__ == "__main__":
-    if DDEBUG is True: # CLI only 
+    if USE_GOOEY is False: # CLI only 
         main()
-    else: # Use GUI if DDBUG is False
+    else:
         main = Gooey(main)
         main()
