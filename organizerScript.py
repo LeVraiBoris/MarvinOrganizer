@@ -9,14 +9,12 @@ import sys
 import numpy as np
 import shutil
 import pandas as pd
-USE_GOOEY = False
+DDEBUG = True
+USE_GOOEY = True
 if USE_GOOEY is True:
     from gooey import Gooey, GooeyParser # Use GUI
 UPDATE_MODEL = True
 CST_MIN_CONFIDENCE = 0.0
-CST_TAB_EXTENSIONS = ['csv', 'xl', 'xls', 'xlsx', 'txt', 'tab', 'xlsb']
-CST_PDF_EXTENSIONS = ['pdf']
-CST_ZIP_EXTENSIONS = ['zip', 'gzip']
 
 def unzipInPlace(inRootPath:str, marvin:marv.MarvinOrganizer):
     """Go down the directory tree and unpack every zip archive that is found.
@@ -30,7 +28,7 @@ def unzipInPlace(inRootPath:str, marvin:marv.MarvinOrganizer):
             split = f.split(".")
             ext = split[-1]
             fname = split[0]
-            if len(fname) > 0 and ext in CST_ZIP_EXTENSIONS: # This will ignore hidden files (on an Unix like system)
+            if len(fname) > 0 and ext in marv.CST_ZIP_EXTENSIONS: # This will ignore hidden files (on an Unix like system)
                 zipDir = os.path.join(dirPath, "Zips")
                 if not os.path.exists(zipDir):
                     os.mkdir(zipDir)
@@ -42,13 +40,12 @@ def unzipInPlace(inRootPath:str, marvin:marv.MarvinOrganizer):
                         split = f.split(".")
                         ext = split[-1]
                         fname = split[0]
-                        if len(fname) > 0 and ext in CST_ZIP_EXTENSIONS: # This will ignore hidden files (on an Unix like system)
+                        if len(fname) > 0 and ext in marv.CST_ZIP_EXTENSIONS: # This will ignore hidden files (on an Unix like system)
                             fPath = os.path.join(zipDir, f)
                             with ZipFile(fPath) as arch:
                                 arch.extractall(zipDir)
 
-
-def sortFolder(inRootPath:str, outRootPath:str, marvin:marv.MarvinOrganizer):
+def sortFolder(inRootPath:str, outRootPath:str, marvin:marv.MarvinOrganizer, consolidate=True):
     reportFile = os.path.join(outRootPath ,"marvinOrganizerReport.csv")
     reportDct = {"OriginalPath":[], "Filename":[], "FileType":[], "Source":[], "Score":[], "SortedPath":[],}
     print("Sorting..", end=" ")
@@ -58,9 +55,9 @@ def sortFolder(inRootPath:str, outRootPath:str, marvin:marv.MarvinOrganizer):
         for f in fList:
             fPath = os.path.join(dirPath, f)
             ext = marvin.utils.normalizeString(f.split(".")[-1])
-            if ext in CST_TAB_EXTENSIONS:
+            if ext in marv.CST_TAB_EXTENSIONS:
                 fileType = "Tabular"
-            elif ext in CST_PDF_EXTENSIONS:
+            elif ext in marv.CST_PDF_EXTENSIONS:
                 fileType = "Pdf"
             else:
                 fileType = "Other"
@@ -94,10 +91,19 @@ def sortFolder(inRootPath:str, outRootPath:str, marvin:marv.MarvinOrganizer):
             reportDct["Score"].append(score)
             reportDct['SortedPath'].append(destDir)
 
-        reportDF = pd.DataFrame.from_dict(reportDct)
-        reportDF.to_csv(reportFile)
+    reportDF = pd.DataFrame.from_dict(reportDct)
+    # Propagate results
+    consolidatedDF =  marvin.extendClassification()
+    consolidatedDF.index = reportDF.index
+    if consolidate is True: # Make the output of the consolidaton the official output
+        reportDF[['Source']] = consolidatedDF[['sourcesList']]
+        reportDF[['Score']] = consolidatedDF[['sourcesProba']]
+    else:
+        reportDF[['SourceInfered']] = consolidatedDF[['sourcesList']]
+        reportDF[['SourceInferedScore']] = consolidatedDF[['sourcesProba']]
+    reportDF.to_csv(reportFile)
 
-def retrainMarvin(organizedPath:str, marvin:marv.MarvinOrganizer):
+def retrainMarvin(organizedPath:str, marvin:marv.MarvinOrganizer, updateModel=False):
     reportFile = os.path.join(organizedPath ,"marvinOrganizerReport.csv")
     #reportDct = {"OriginalPath":[], "SortedPath":[], "Source":[], "Score":[]}
     trainDataDF = pd.read_csv(reportFile)
@@ -121,15 +127,15 @@ def retrainMarvin(organizedPath:str, marvin:marv.MarvinOrganizer):
                 # Move the file 
                 srcFile = os.path.join(realPath, r["Filename"])
                 destFile = os.path.join(desiredPath, r["Filename"])
-                if UPDATE_MODEL is True:
+                if updateModel is True:
                     marvin.updateFromFile(srcFile, r["Source"])
                 if not os.path.isdir(desiredPath):
                     os.mkdir(desiredPath)
                 if os.path.exists(destFile) is not True:
                     os.rename(srcFile, destFile)
                 trainDataDF.loc[idx, "SortedPath"] = desiredPath
-    trainDataDF.to_csv(reportFile)
-    if USE_GOOEY is False:
+    trainDataDF.to_csv(reportFile, index=False)
+    if updateModel is True: # Only save the model when not debuggging
         marvin.toJson()
 
 def run(args):
@@ -151,7 +157,13 @@ def run(args):
     outRootPath = args.output_folder
     retrain = args.fix
     unzip = args.unzip_all
-    deleteOutPath = args.delete_existing
+    consolidate = args.consolidate
+
+    if DDEBUG is True:  # When debugging  delete any existing output
+        deleteOutPath = True
+    else:
+        deleteOutPath = args.delete_existing
+
     if outRootPath == "Default":
         if retrain is False:
             basePath = os.path.dirname(inRootPath) 
@@ -183,10 +195,12 @@ def run(args):
     
     if retrain is False:
         # Sort the input folder 
-        sortFolder(inRootPath, outRootPath, marvin)
+        sortFolder(inRootPath, outRootPath, marvin, consolidate = consolidate)
+        if consolidate is True: # Automatically fix but do not update the model
+            retrainMarvin(outRootPath, marvin, updateModel=False)
     else:
         # Update Marvin according to the instructions given in "marvinOrganizerReport.csv"
-        retrainMarvin(outRootPath, marvin)
+        retrainMarvin(outRootPath, marvin, updateModel=UPDATE_MODEL)
     print("done !")
     return
 
@@ -198,18 +212,20 @@ def main():
         cmdParser.add_argument("-o", "--output_folder", 
                                 help="output folder for the sorted files (Optionnal). Defaults to $rootFolder +\' Organized\' (aka $outputDir)",
                                 default="Default")
-
     else:
         cmdParser = GooeyParser(description='Sort statement files according to RYLTY source .')
         cmdParser.add_argument("input_folder", 
-                            widget = 'DirChooser',
-                            help="Folder to sort (aka $inputDir)")
+                                widget='DirChooser',
+                                help="Folder to sort (aka $inputDir)")
         cmdParser.add_argument("-o", "--output_folder", 
-                            widget = 'DirChooser',
-                            help="output folder for the sorted files (Optionnal). Defaults to $rootFolder +\' Organized\' (aka $outputDir)",
-                            default="Default")
+                                widget='DirChooser',
+                                help="output folder for the sorted files (Optionnal). Defaults to $rootFolder +\' Organized\' (aka $outputDir)",
+                                default="Default")
     cmdParser.add_argument("-d", "--delete_existing",
                     help="Delete pre-existing output folder (default) unless \'--fix\' is checked",
+                    action='store_true')
+    cmdParser.add_argument("-c", "--consolidate",
+                    help="Consolidate the classification based on folder structure inference",
                     action='store_true')
     cmdParser.add_argument("-f", "--fix",
                     help="Fix the mistakes in the Organized file system based on sources given in  $outputDir/marvinOrganizerReport.csv",

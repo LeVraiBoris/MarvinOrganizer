@@ -5,6 +5,8 @@ import numpy as np
 # Paralellize some jobs where possible... after all I got 32 CPUs I should use them...
 from joblib import Parallel, delayed
 import re
+import sklearn
+import sklearn.discriminant_analysis
 from unidecode import unidecode
 from gensim.models.fasttext import FastText
 from tqdm import tqdm
@@ -12,9 +14,13 @@ from tqdm import tqdm
 
 import gemsimUtils
 
+CST_TAB_EXTENSIONS = ['csv', 'xl', 'xls', 'xlsx', 'txt', 'tab', 'xlsb']
+CST_PDF_EXTENSIONS = ['pdf']
+CST_ZIP_EXTENSIONS = ['zip', 'gzip']
+
 CST_MODEL_VERSION = "v5"
 CST_VCT_TYPE = "FastTxtHash"
-#@TODO Remove files built with terylty template:
+#@TODO Remove files built with therylty template:
 # statementDate,title,workId,incomeSource,sourceGrossIncome,royaltyAmount,incomeType,distributionType,featuredArtist,country,perfCount
 
 class MarvinOrganizerUtils:
@@ -338,7 +344,10 @@ class MarvinOrganizer():
         """Basic constructor, nothing to see here.
         """
         self.utils = MarvinOrganizerUtils()
-
+        self.workspaceFileList = []
+    
+    def resetBatchList(self):
+        self.workspaceFileList = []
 
     def updateFromFile(self, file:str, label:str, ruleKey:int=None, wizardKey:int=None):
         """Add a single file to the model.
@@ -386,7 +395,7 @@ class MarvinOrganizer():
         self.label2id = dataset.label2id
         self.sourceVectors = {k:[] for k in self.label2id.keys()}
         self.sourceCount = {k:0 for k in self.label2id.keys()}
-        # self.sourceProba = {k:0 for k in self.label2id.keys()}
+        # self.sourcesProba = {k:0 for k in self.label2id.keys()}
         self.col2idx = {}
         self.idx2col = {} 
         self.vectorSources = {}
@@ -432,7 +441,7 @@ class MarvinOrganizer():
         srcProba = [self.sourceCount[k] for k in self.sourceCount.keys()]
         srcProba = np.exp(srcProba/np.sum(srcProba)) # Data is normalized to a unit vector to keep it numericaly behaved
         srcProba = srcProba/np.sum(srcProba)
-        self.sourceProba = {k:p for k, p in zip(self.sourceCount.keys(), srcProba)}
+        self.sourcesProba = {k:p for k, p in zip(self.sourceCount.keys(), srcProba)}
         # Compute the prior probability of each embedding vector
         vctProba = [self.vectorCount[k] for k in self.vectorCount.keys()]
         vctProba = np.exp(vctProba / np.sum(vctProba))# Data is normalized to a unit vector to keep it numericaly behaved
@@ -445,7 +454,7 @@ class MarvinOrganizer():
             lblsProba = np.exp(lblsProba / np.sum(lblsProba))# Data is normalized to a unit vector to keep it numericaly behaved
             lblsProba = lblsProba / np.sum(lblsProba)
             self.vectorSourcesProba[srcK] = {k:p for k, p in zip(self.vectorSourcesCount[srcK].keys(), lblsProba)}
-        for i,k in enumerate(self.sourceProba.keys()):
+        for i,k in enumerate(self.sourcesProba.keys()):
             self.label2id[k] = i
             self.id2label[i] = k
 
@@ -461,7 +470,12 @@ class MarvinOrganizer():
         emb, _, _, _ = self.utils.buildFileEmbedding(fileName)
         sourcesList = []
         sourcesProba = [] 
+        
         if len(emb) == 0 or np.isnan(np.any(emb)):
+            fileDct = {'file':fileName,
+                       'sourcesProba': sourcesProba,
+                       'sourcesList': sourcesList}
+            self.workspaceFileList.append(fileDct)
             return sourcesList, sourcesProba
 
         embStr = str(self.utils.vctToHash(emb))
@@ -469,10 +483,15 @@ class MarvinOrganizer():
             sourcesList = self.vectorSources[embStr]
             # Compute the posterior of the match based on the computed statistics on the training data set
             # We drop the source prior for now since it looks very disbalanced
-            # sourcesProba = [(self.vectorSourcesProba[embStr][k] * self.sourceProba[k] ) /self.vectorProba[embStr] for k in sources]
+            # sourcesProba = [(self.vectorSourcesProba[embStr][k] * self.sourcesProba[k] ) /self.vectorProba[embStr] for k in sources]
             sourcesProba = [self.vectorSourcesProba[embStr][k] for k in sourcesList]
             sourcesProba = np.exp(sourcesProba)
             sourcesProba = sourcesProba/np.sum(sourcesProba)
+        fileDct = {'file':fileName,
+                   'sourcesProba': sourcesProba,
+                   'sourcesList': sourcesList}
+        self.workspaceFileList.append(fileDct)
+
         return sourcesList, sourcesProba
  
     def toJson(self, jsonFile:str=None):
@@ -532,7 +551,70 @@ class MarvinOrganizer():
         self.label2id = dataset.label2id
         self.id2label = dataset.id2label
 
-
+    def extendClassification(self):
+        def getRad(pth:str):
+            """Return the radical of the file name.
+                ie. the whole path without extension or white spaces.
+            """
+            return "".join(pth.split(".")[:-1]).replace(" ","")
+            
+        # Build a list of filepath embeddings for each known file
+        # Build a training dataset based on files that have already been classified
+        trainsetEmbeddings = []
+        trainsetLabels = []
+        worksetIndexes = []
+       
+        # For these task we have a dedicated label-index matching since not all known classes will be represented.
+        lclLabel2id = {"unknown":0}
+        lclId2Label = {0:"unknown"}
+        idCpt = 1 # Class counter
+        currId = 0 # Current class id
+        for i, f in enumerate(self.workspaceFileList):
+            if len(f['sourcesProba']) > 0:
+                idx = np.argmax(f['sourcesProba'])
+                currentLbl = f['sourcesList'][idx]
+                # Update the sorted data so that only the most likely source is kept
+                self.workspaceFileList[i]['sourcesList'] = currentLbl
+                self.workspaceFileList[i]['sourcesProba'] = 1. # Since it's from the training dataset the posteriori should be 1. f['sourcesProba'][idx]
+                rad = getRad(f['file']) # Ignore file extension and white spaces 
+                
+                emb = self.utils.buildTextEmbedding(rad)
+                if currentLbl not in lclLabel2id.keys():
+                     currId = idCpt
+                     lclLabel2id[currentLbl] = idCpt
+                     lclId2Label[idCpt] = currentLbl
+                     idCpt += 1
+                else:
+                    currId = lclLabel2id[currentLbl]
+                trainsetEmbeddings.append(emb)
+                trainsetLabels.append(currId)
+                # trainsetIndexes.append(i)
+            else:
+                # If it was an unsorted tabular file, it means the format is not known we add it as "unknown" to the training dataset
+                ext = self.utils.normalizeString(f['file'].split('.')[-1])
+                if ext in CST_TAB_EXTENSIONS:
+                    self.workspaceFileList[i]['sourcesList'] = 'unknown'
+                    self.workspaceFileList[i]['sourcesProba'] = 1.
+                    rad = "".join(f['file'].split(".")[:-1]).replace(" ","")
+                    emb = self.utils.buildTextEmbedding(rad)
+                    trainsetEmbeddings.append(emb)
+                    currId = lclLabel2id["unknown"]
+                    trainsetLabels.append(currId)
+                else:
+                    worksetIndexes.append(i)
+        if len(trainsetLabels) > 0:
+            classifier =  sklearn.discriminant_analysis.LinearDiscriminantAnalysis()
+            classifier.fit(np.array(trainsetEmbeddings),np.array(trainsetLabels))
+            worksetEmb = np.array([self.utils.buildTextEmbedding(getRad(self.workspaceFileList[i]['file'])) for i in worksetIndexes])
+            worksetPosteriors = classifier.predict_proba(worksetEmb)
+            for i,wsIdx in enumerate(worksetIndexes):
+                scores = worksetPosteriors[i]
+                lblIdx= np.argmax(scores)
+                self.workspaceFileList[wsIdx]['sourcesList'] = lclId2Label[lblIdx]
+                self.workspaceFileList[wsIdx]['sourcesProba'] = scores[lblIdx]
+        
+        return pd.DataFrame(self.workspaceFileList)
+    
 if __name__ == "__main__":
     # Select task
     marvinMatchTest = True
