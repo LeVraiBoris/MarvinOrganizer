@@ -9,7 +9,9 @@ WIN_INSTALLER=$LOCAL_WINE_STORE/Python/Python310/Scripts/pyinstaller.exe
 echo 'Cleaning up...' 
 rm ./dist -rf
 echo 'Update requirements...'
-wine $WIN_PIP install -r requirements.txt
+wine $WIN_PIP freeze > winOldies.txt
+wine $WIN_PIP uninstall -r winOldies.txt -y
+wine $WIN_PIP install -r winRequirements.txt
 echo 'Building package...'
 wine $WIN_INSTALLER $PROGRAM_NAME.py
 
