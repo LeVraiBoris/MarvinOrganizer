@@ -14,9 +14,6 @@ from gooey import Gooey, GooeyParser
 DDEBUG = False
 UPDATE_MODEL = True
 CST_MIN_CONFIDENCE = 0.0
-CST_TAB_EXTENSIONS = ['csv', 'xl', 'xls', 'xlsx', 'txt', 'tab', 'xlsb']
-CST_PDF_EXTENSIONS = ['pdf']
-CST_ZIP_EXTENSIONS = ['zip', 'gzip']
 
 def unzipInPlace(inRootPath:str, marvin:marv.MarvinOrganizer):
     """Go down the directory tree and unpack every zip archive that is found.
@@ -30,7 +27,7 @@ def unzipInPlace(inRootPath:str, marvin:marv.MarvinOrganizer):
             split = f.split(".")
             ext = split[-1]
             fname = split[0]
-            if len(fname) > 0 and ext in CST_ZIP_EXTENSIONS: # This will ignore hidden files (on an Unix like system)
+            if len(fname) > 0 and ext in marv.CST_ZIP_EXTENSIONS: # This should ignore hidden files (on an Unix like system)
                 zipDir = os.path.join(dirPath, "Zips")
                 if not os.path.exists(zipDir):
                     os.mkdir(zipDir)
@@ -38,12 +35,13 @@ def unzipInPlace(inRootPath:str, marvin:marv.MarvinOrganizer):
                 with ZipFile(fPath) as arch:
                     arch.extractall(zipDir)
                     # We go as far as searching for zips inside zips
-                    for f in os.listdir(zipDir):
-                        split = f.split(".")
+                    for zipedFile in os.listdir(zipDir):
+                        split = zipedFile.split(".")
                         ext = split[-1]
                         fname = split[0]
-                        if len(fname) > 0 and ext in CST_ZIP_EXTENSIONS: # This will ignore hidden files (on an Unix like system)
-                            fPath = os.path.join(zipDir, f)
+                        fPath = os.path.join(zipDir, zipedFile)
+                        if len(fname) > 0 and ext in marv.CST_ZIP_EXTENSIONS: # This will ignore hidden files (on an Unix like system)
+                            fPath = os.path.join(zipDir, zipedFile)
                             with ZipFile(fPath) as arch:
                                 arch.extractall(zipDir)
 
@@ -211,11 +209,14 @@ def main():
     cmdParser.add_argument("-d", "--delete_existing",
                     help="Delete pre-existing output folder (default) unless \'--fix\' is checked",
                     action='store_true')
-    cmdParser.add_argument("-f", "--fix",
-                    help="Fix the mistakes in the Organized file system based on sources given in  $outputDir/marvinOrganizerReport.csv",
-                    action='store_true')
     cmdParser.add_argument("-z", "--unzip_all",
                     help="Unzip all archives found in $inputDir before sorting",
+                    action='store_true')
+    cmdParser.add_argument("-c", "--consolidate",
+                    help="Consolidate the classification based on folder structure inference",
+                    action='store_true')
+    cmdParser.add_argument("-f", "--fix",
+                    help="Fix the mistakes in the Organized file system based on sources given in  $outputDir/marvinOrganizerReport.csv",
                     action='store_true')
     args = cmdParser.parse_args()
     run(args)

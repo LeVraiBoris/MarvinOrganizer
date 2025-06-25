@@ -14,8 +14,10 @@ import gemsimUtils
 
 CST_MODEL_VERSION = "v5"
 CST_VCT_TYPE = "FastTxtHash"
-#@TODO Remove files built with terylty template:
-# statementDate,title,workId,incomeSource,sourceGrossIncome,royaltyAmount,incomeType,distributionType,featuredArtist,country,perfCount
+CST_TAB_EXTENSIONS = ['csv', 'xl', 'xls', 'xlsx', 'txt', 'tab', 'xlsb']
+CST_PDF_EXTENSIONS = ['pdf']
+CST_ZIP_EXTENSIONS = ['zip', 'gzip']
+
 
 class MarvinOrganizerUtils:
     """Utilities class for the Marvin organizer"""
@@ -140,9 +142,9 @@ class MarvinOrganizerUtils:
             # if ext == 'pdf':
             #     txt = self.readPdf(filename)
             if ext == 'csv':
-                df = self.readCSV(filename)
+                df = self.readCSV(filename, nrows=10)
             elif ext == 'xls' or ext == 'xlsx' or ext  == 'xlsb':
-                df = self.readXLS(filename)
+                df = self.readXLS(filename, nrows=10)
         except Exception as inst:
             emb = []
             print("Could not read : ", filename)
@@ -179,30 +181,38 @@ class MarvinOrganizerUtils:
     #     self.pdfParser.loadPdf(filename)
     #     txt = ''.join(self.pdfParser.pageText)
     #     return txt
-    
-    def readCSV(self, filename):
+    def readCSV(self, filename, nrows=None):
+        """Read a CSV file and return an pandas dataframe with the data it contains.
+
+        Args:
+            filename (str): path to the file to read 
+            nrows (int, optional): Only read the first rows of the file. Defaults to None (all rows).
+
+        Returns:
+            pd.dataFrame: The data contained in the CSV
+        """
         sepLst=[',',';','\t']
         df = None
         for s in sepLst:
             if df is None:
                 try:
-                    df = pd.read_csv(filename, sep=s,engine='python', encoding="utf_8", nrows=10)
+                    df = pd.read_csv(filename, sep=s,engine='python', encoding="utf_8", nrows=nrows)
                 except:
                     try:
-                        df = pd.read_csv(filename, sep=s,engine='c', encoding="utf_8", nrows=10, low_memory=False)
+                        df = pd.read_csv(filename, sep=s,engine='c', encoding="utf_8", nrows=nrows, low_memory=False)
                     except:
                         try:
-                            df = pd.read_csv(filename, sep=s,engine='python', encoding='latin_1', nrows=10, low_memory=False)
+                            df = pd.read_csv(filename, sep=s,engine='python', encoding='latin_1', nrows=nrows, low_memory=False)
                         except:
                             try:
-                                df = pd.read_csv(filename, sep=s,engine='c', encoding='latin_1', nrows=10, low_memory=False)
+                                df = pd.read_csv(filename, sep=s,engine='c', encoding='latin_1', nrows=nrows, low_memory=False)
                             except:
                                 df = None
             if df is not None and df.shape[1] == 1:
                 df = None
         return df
 
-    def readXLS (self, filename):
+    def readXLS (self, filename, nrows=None):
         # This is a potential patch for stylesheet related errors taken from:
         # https://stackoverflow.com/questions/50236928/openpyxl-valueerror-max-value-is-14-when-using-load-workbook/71526058#71526058
         # IMPORTANT, you must do this before importing openpyxl
@@ -213,16 +223,16 @@ class MarvinOrganizerUtils:
         self.fixXLErr14.start()
         df = None
         try:
-            df = pd.read_excel(filename, nrows=10, engine='calamine')
+            df = pd.read_excel(filename, nrows=nrows, engine='calamine')
         except:
             try:
-                df = pd.read_excel(filename, nrows=10, engine='openpyxl')
+                df = pd.read_excel(filename, nrows=nrows, engine='openpyxl')
             except:
                 try:
-                    df = pd.read_excel(filename, nrows=10, engine='xlrd')
+                    df = pd.read_excel(filename, nrows=nrows, engine='xlrd')
                 except:
                     try:
-                        df =  pd.read_excel(filename, nrows=10, engine='pyxlsb')
+                        df =  pd.read_excel(filename, nrows=nrows, engine='pyxlsb')
                     except:
                         df = None
         self.fixXLErr14.stop()
@@ -531,7 +541,6 @@ class MarvinOrganizer():
         """
         self.label2id = dataset.label2id
         self.id2label = dataset.id2label
-
 
 if __name__ == "__main__":
     # Select task
