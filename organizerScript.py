@@ -56,9 +56,9 @@ def sortFolder(inRootPath:str, outRootPath:str, marvin:marv.MarvinOrganizer):
         for f in fList:
             fPath = os.path.join(dirPath, f)
             ext = marvin.utils.normalizeString(f.split(".")[-1])
-            if ext in CST_TAB_EXTENSIONS:
+            if ext in marv.CST_TAB_EXTENSIONS:
                 fileType = "Tabular"
-            elif ext in CST_PDF_EXTENSIONS:
+            elif ext in marv.CST_PDF_EXTENSIONS:
                 fileType = "Pdf"
             else:
                 fileType = "Other"
