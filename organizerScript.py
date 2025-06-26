@@ -58,6 +58,8 @@ def sortFolder(inRootPath:str, outRootPath:str, marvin:marv.MarvinOrganizer):
             ext = marvin.utils.normalizeString(f.split(".")[-1])
             if ext in marv.CST_TAB_EXTENSIONS:
                 fileType = "Tabular"
+            elif ext in marv.CST_TAB_CONVERSION_EXTENSIONS:
+                fileType = "TabularToConvert"
             elif ext in marv.CST_PDF_EXTENSIONS:
                 fileType = "Pdf"
             else:

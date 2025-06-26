@@ -14,7 +14,8 @@ import gemsimUtils
 
 CST_MODEL_VERSION = "v5"
 CST_VCT_TYPE = "FastTxtHash"
-CST_TAB_EXTENSIONS = ['csv', 'xl', 'xls', 'xlsx', 'txt', 'tab', 'xlsb']
+CST_TAB_EXTENSIONS = ['csv', 'xl', 'xls', 'xlsx', 'xlsb']
+CST_TAB_CONVERSION_EXTENSIONS = ['txt', 'tab']
 CST_PDF_EXTENSIONS = ['pdf']
 CST_ZIP_EXTENSIONS = ['zip', 'gzip']
 
