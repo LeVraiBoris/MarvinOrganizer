@@ -1,17 +1,17 @@
+
 import os
-from posixpath import basename
-import re
+import zipfile
 from zipfile import ZipFile
 
 import marvinOrganizer as marv
 import argparse
-import sys
 import numpy as np
 import shutil
 import pandas as pd
-
 from gooey import Gooey, GooeyParser
+
 DDEBUG = False
+
 UPDATE_MODEL = True
 CST_MIN_CONFIDENCE = 0.0
 
@@ -22,28 +22,47 @@ def unzipInPlace(inRootPath:str, marvin:marv.MarvinOrganizer):
         inRootPath (str): path to the folder to sort
         marvin (marv.MarvinOrganizer): an instance of the Marvin organizer 
     """
-    for dirPath, dList, fList in os.walk(inRootPath):
-        for f in fList:
+    for f in os.listdir(inRootPath):
+        fPath = os.path.join(inRootPath,f)
+        if os.path.isdir(fPath):
+            unzipInPlace(fPath, marvin)
+        else:
             split = f.split(".")
             ext = split[-1]
             fname = split[0]
-            if len(fname) > 0 and ext in marv.CST_ZIP_EXTENSIONS: # This should ignore hidden files (on an Unix like system)
-                zipDir = os.path.join(dirPath, "Zips")
+            if len(fname) > 0 and zipfile.is_zipfile(fPath):
+                zipDir = os.path.join(inRootPath, fname)
                 if not os.path.exists(zipDir):
                     os.mkdir(zipDir)
-                fPath = os.path.join(dirPath, f)
                 with ZipFile(fPath) as arch:
                     arch.extractall(zipDir)
-                    # We go as far as searching for zips inside zips
-                    for zipedFile in os.listdir(zipDir):
-                        split = zipedFile.split(".")
-                        ext = split[-1]
-                        fname = split[0]
-                        fPath = os.path.join(zipDir, zipedFile)
-                        if len(fname) > 0 and ext in marv.CST_ZIP_EXTENSIONS: # This will ignore hidden files (on an Unix like system)
-                            fPath = os.path.join(zipDir, zipedFile)
-                            with ZipFile(fPath) as arch:
-                                arch.extractall(zipDir)
+                for dirPath, dList, fList in os.walk(zipDir):
+                    for zf in fList:
+                       os.rename(os.path.join(dirPath, zf), os.path.join(dirPath, fname+"_"+zf))
+                unzipInPlace(zipDir, marvin)
+
+    # for dirPath, dList, fList in os.walk(inRootPath):
+    #     for f in fList:
+    #         split = f.split(".")
+    #         ext = split[-1]
+    #         fname = split[0]
+    #         if len(fname) > 0 and ext in marv.CST_ZIP_EXTENSIONS: # This should ignore hidden files (on an Unix like system)
+    #             zipDir = os.path.join(dirPath, "Zips")
+    #             if not os.path.exists(zipDir):
+    #                 os.mkdir(zipDir)
+    #             fPath = os.path.join(dirPath, f)
+    #             with ZipFile(fPath) as arch:
+    #                 arch.extractall(zipDir)
+    #                 # We go as far as searching for zips inside zips
+    #                 for zipedFile in os.listdir(zipDir):
+    #                     split = zipedFile.split(".")
+    #                     ext = split[-1]
+    #                     fname = split[0]
+    #                     fPath = os.path.join(zipDir, zipedFile)
+    #                     if len(fname) > 0 and ext in marv.CST_ZIP_EXTENSIONS: # This will ignore hidden files (on an Unix like system)
+    #                         fPath = os.path.join(zipDir, zipedFile)
+    #                         with ZipFile(fPath) as arch:
+    #                             arch.extractall(zipDir)
 
 
 def sortFolder(inRootPath:str, outRootPath:str, marvin:marv.MarvinOrganizer):
