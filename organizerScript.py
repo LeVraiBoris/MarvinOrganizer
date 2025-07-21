@@ -116,7 +116,7 @@ def sortFolder(inRootPath:str, outRootPath:str, marvin:marv.MarvinOrganizer):
         reportDF = pd.DataFrame.from_dict(reportDct)
         reportDF.to_csv(reportFile)
 
-def retrainMarvin(organizedPath:str, marvin:marv.MarvinOrganizer):
+def retrainMarvin(organizedPath:str, marvin:marv.MarvinOrganizer, updateModel=False):
     reportFile = os.path.join(organizedPath ,"marvinOrganizerReport.csv")
     #reportDct = {"OriginalPath":[], "SortedPath":[], "Source":[], "Score":[]}
     trainDataDF = pd.read_csv(reportFile)
@@ -140,7 +140,7 @@ def retrainMarvin(organizedPath:str, marvin:marv.MarvinOrganizer):
                 # Move the file 
                 srcFile = os.path.join(realPath, r["Filename"])
                 destFile = os.path.join(desiredPath, r["Filename"])
-                if UPDATE_MODEL is True:
+                if updateModel is True:
                     marvin.updateFromFile(srcFile, r["Source"])
                 if not os.path.isdir(desiredPath):
                     os.mkdir(desiredPath)
@@ -171,6 +171,7 @@ def run(args):
     retrain = args.fix
     unzip = args.unzip_all
     deleteOutPath = args.delete_existing
+    updateModel = args.update_model
     if outRootPath == "Default":
         if retrain is False:
             basePath = os.path.dirname(inRootPath) 
@@ -205,7 +206,7 @@ def run(args):
         sortFolder(inRootPath, outRootPath, marvin)
     else:
         # Update Marvin according to the instructions given in "marvinOrganizerReport.csv"
-        retrainMarvin(outRootPath, marvin)
+        retrainMarvin(outRootPath, marvin, updateModel)
     print("done !")
     return
 
@@ -238,6 +239,9 @@ def main():
                     action='store_true')
     cmdParser.add_argument("-f", "--fix",
                     help="Fix the mistakes in the Organized file system based on sources given in  $outputDir/marvinOrganizerReport.csv",
+                    action='store_true')
+    cmdParser.add_argument("-u", "--update_model",
+                    help="Update the organizer model when fixing misakes",
                     action='store_true')
     args = cmdParser.parse_args()
     run(args)
