@@ -8,28 +8,14 @@ import argparse
 import numpy as np
 import shutil
 import pandas as pd
-from gooey import Gooey, GooeyParser
-
-import organizerUtils 
-
+import organizerUtils
 DDEBUG = False
 
 def main():
-    if DDEBUG is True:
-        cmdParser = argparse.ArgumentParser(description='Sort statement files according to RYLTY source .')
-        cmdParser.add_argument("input_folder", 
-                                help="Folder to sort (aka $inputDir)")
-        cmdParser.add_argument("-o", "--output_folder", 
-                                help="output folder for the sorted files (Optionnal). Defaults to $rootFolder +\' Organized\' (aka $outputDir)",
-                                default="Default")
-
-    else:
-        cmdParser = GooeyParser(description='Sort statement files according to RYLTY source .')
-        cmdParser.add_argument("input_folder", 
-                            widget = 'DirChooser',
+    cmdParser = argparse.ArgumentParser(description='Sort statement files according to RYLTY source .')
+    cmdParser.add_argument("input_folder", 
                             help="Folder to sort (aka $inputDir)")
-        cmdParser.add_argument("-o", "--output_folder", 
-                            widget = 'DirChooser',
+    cmdParser.add_argument("-o", "--output_folder", 
                             help="output folder for the sorted files (Optionnal). Defaults to $rootFolder +\' Organized\' (aka $outputDir)",
                             default="Default")
     cmdParser.add_argument("-d", "--delete_existing",
@@ -51,8 +37,5 @@ def main():
     organizerUtils.run(args)
 
 if __name__ == "__main__":
-    if DDEBUG is True: # CLI only 
-        main()
-    else: # Use GUI if DDBUG is False
-        main = Gooey(main)
-        main()
+    # Run CLI
+    main()
